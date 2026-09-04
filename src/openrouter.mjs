@@ -25,7 +25,13 @@ export async function complete({ model, system, user, maxTokens = 8000 }) {
   });
 
   if (!res.ok) {
-    throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 400)}`);
+    const body = (await res.text()).slice(0, 400);
+    const err = new Error(`OpenRouter ${res.status}: ${body}`);
+    // Out of credit or a dead key is not a transient hiccup: it means no review
+    // will ever run again until someone acts. Tagged so the caller can be loud
+    // about it instead of passing green with a warning nobody reads.
+    if (res.status === 401 || res.status === 402 || res.status === 403) err.fatal = true;
+    throw err;
   }
   const body = await res.json();
   const text = body.choices?.[0]?.message?.content;

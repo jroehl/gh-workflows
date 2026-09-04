@@ -156,6 +156,8 @@ main().then(
   (code) => process.exit(code),
   (err) => {
     console.error(`pr-critic: ${err.message}`);
-    process.exit(1);
+    // Exit 3 says "this will not fix itself": credit exhausted, key revoked or
+    // no longer authorised.
+    process.exit(err.fatal ? 3 : 1);
   },
 );

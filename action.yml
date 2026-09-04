@@ -53,12 +53,21 @@ runs:
         # Under set -e a bare test that returns 1 would end the step, so this is
         # written as a full if.
         if [ "$POST" = "true" ]; then args+=(--post); fi
-        # The review is advisory, so a model outage or a rate limit must not turn
-        # someone's pull request red.
-        npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}" "${args[@]}" || {
+        # A transient model outage must not turn someone's pull request red. Exit 3
+        # is the other kind: credit exhausted or the key is dead, so no review will
+        # run again anywhere until someone acts. That one fails the check, because a
+        # warning in a collapsed log is indistinguishable from a clean review.
+        set +e
+        npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}" "${args[@]}"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 3 ]; then
+          echo "::error::pr-critic could not authenticate to OpenRouter (credit exhausted or key revoked). No review ran, and none will until the key is replaced."
+          exit 1
+        elif [ "$rc" -ne 0 ]; then
           echo "::warning::pr-critic did not complete; no review was posted."
           exit 0
-        }
+        fi
 
     - uses: actions/upload-artifact@v4
       if: always()
