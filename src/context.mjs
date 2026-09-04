@@ -32,7 +32,13 @@ export function collectContext({ base, cwd = process.cwd(), excludes = [], budge
   // branch since branching are not reported as this branch's changes.
   const range = `${base}...HEAD`;
   const stat = git(["diff", "--stat", range, "--", ".", ...pathspec], cwd).trim();
-  const raw = git(["diff", "--unified=3", range, "--", ".", ...pathspec], cwd);
+  // --function-context, not a bare hunk: a refuter that cannot see the function a
+  // changed line sits in kills true findings as UNPROVEN, which is the expensive
+  // failure here. Measured on a real PR, two correct findings died that way.
+  const raw = git(
+    ["diff", "--function-context", "--unified=10", range, "--", ".", ...pathspec],
+    cwd,
+  );
   const commits = git(["log", "--format=%s%n%b", `${base}..HEAD`], cwd).trim();
   const { diff, truncated } = truncate(raw, budget);
 
