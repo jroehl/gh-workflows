@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { collectContext, fetchPrIntent } from "../src/context.mjs";
+import { runCritic } from "../src/critic.mjs";
+import { runRefute } from "../src/refute.mjs";
+
+const DEFAULTS = {
+  // Cross-family by design: the critic is not an Anthropic model, and the refuter
+  // is not the critic's family either.
+  critic: "openai/gpt-5.1-codex",
+  refuter: "google/gemini-3.1-pro-preview",
+};
+
+function parseArgs(argv) {
+  const out = { base: null, pr: null, repo: null, json: null, excludes: [], keepUnproven: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const next = () => argv[++i];
+    if (a === "--base") out.base = next();
+    else if (a === "--pr") out.pr = next();
+    else if (a === "--repo") out.repo = next();
+    else if (a === "--critic-model") out.critic = next();
+    else if (a === "--refuter-model") out.refuter = next();
+    else if (a === "--json") out.json = next();
+    else if (a === "--exclude") out.excludes.push(next());
+    else if (a === "--keep-unproven") out.keepUnproven = true;
+    else if (a === "--help" || a === "-h") out.help = true;
+    else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
+  }
+  return out;
+}
+
+const USAGE = `pr-critic --base <ref> [--pr <n> --repo <owner/name>] [options]
+
+  --base <ref>            base to diff against (default: origin/HEAD, then main)
+  --pr <n> --repo <o/r>   fetch the PR title+body as the stated intent
+  --critic-model <id>     default ${DEFAULTS.critic}
+  --refuter-model <id>    default ${DEFAULTS.refuter}
+  --exclude <pathspec>    extra path to leave out of the diff (repeatable)
+  --keep-unproven         keep findings the refuter could not settle
+  --json <path>           also write the full result as JSON
+
+Needs OPENROUTER_API_KEY. Prints surviving findings as JSON on stdout.`;
+
+function defaultBase(cwd) {
+  for (const ref of ["origin/HEAD", "origin/main", "main", "origin/master", "master"]) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: "ignore" });
+      return ref;
+    } catch {
+      /* try next */
+    }
+  }
+  return "main";
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log(USAGE);
+    return 0;
+  }
+
+  const cwd = process.cwd();
+  const base = args.base ?? defaultBase(cwd);
+  const criticModel = args.critic ?? DEFAULTS.critic;
+  const refuterModel = args.refuter ?? DEFAULTS.refuter;
+
+  const context = collectContext({ base, cwd, excludes: args.excludes });
+  if (context.empty) {
+    console.error(`No changes against ${base}.`);
+    console.log(JSON.stringify({ base, findings: [], meta: { empty: true } }, null, 2));
+    return 0;
+  }
+
+  const prIntent = await fetchPrIntent({
+    repo: args.repo,
+    pr: args.pr,
+    token: process.env.GITHUB_TOKEN,
+  });
+  const intent = prIntent ? `${prIntent.title}\n\n${prIntent.body}` : context.commits;
+
+  console.error(`base=${base} critic=${criticModel} refuter=${refuterModel}`);
+  const critic = await runCritic({ model: criticModel, context, intent });
+  console.error(`critic: ${critic.findings.length} finding(s)`);
+
+  const refute = await runRefute({ model: refuterModel, context, findings: critic.findings });
+  const byIndex = new Map(refute.verdicts.map((v) => [v.index, v]));
+
+  const judged = critic.findings.map((f, i) => {
+    // A finding the refuter never returned a verdict for has not been cleared;
+    // treat the silence as UNPROVEN rather than quietly promoting it.
+    const v = byIndex.get(i) ?? { verdict: "UNPROVEN", reason: "no verdict returned" };
+    return { ...f, verdict: v.verdict, refutation: v.reason };
+  });
+
+  const keep = new Set(args.keepUnproven ? ["CONFIRMED", "UNPROVEN"] : ["CONFIRMED"]);
+  const survivors = judged.filter((f) => keep.has(f.verdict));
+
+  const result = {
+    base,
+    findings: survivors,
+    dismissed: judged.filter((f) => !keep.has(f.verdict)),
+    meta: {
+      critic: critic.model,
+      refuter: refute.model,
+      raised: critic.findings.length,
+      survived: survivors.length,
+      truncated: context.truncated,
+      usage: { critic: critic.usage, refuter: refute.usage },
+    },
+  };
+
+  const text = JSON.stringify(result, null, 2);
+  if (args.json) writeFileSync(args.json, text);
+  console.log(text);
+  console.error(`survived: ${survivors.length}/${critic.findings.length}`);
+  return 0;
+}
+
+main().then(
+  (code) => process.exit(code),
+  (err) => {
+    console.error(`pr-critic: ${err.message}`);
+    process.exit(1);
+  },
+);

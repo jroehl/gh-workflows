@@ -1,0 +1,10 @@
+{
+  "name": "@jroehl/gh-workflows",
+  "version": "0.1.0",
+  "description": "Cross-model adversarial PR review that runs identically in CI and on a laptop",
+  "type": "module",
+  "bin": { "pr-critic": "bin/pr-critic.mjs" },
+  "engines": { "node": ">=20" },
+  "files": ["bin", "src"],
+  "license": "MIT"
+}
