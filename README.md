@@ -69,3 +69,32 @@ usually cheaper than spending a Codex plan's quota on the same review.
 [arXiv 2510.21513]: https://arxiv.org/abs/2510.21513
 [QASecClaw]: https://arxiv.org/html/2605.01885v1
 [arXiv 2604.03196]: https://arxiv.org/html/2604.03196v1
+
+## Use it from CI
+
+Add a caller stub to the repo. The workflow lives here and is public, so any
+owner can call it; each supplies its own `OPENROUTER_API_KEY`.
+
+```yaml
+name: PR review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    uses: jroehl/gh-workflows/.github/workflows/pr-review.yml@main
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    with:
+      runs-on: ubuntu-22.04   # or a self-hosted label where you have runners
+```
+
+Where org secrets do not reach private repositories (GitHub Free), the key is a
+repository secret instead. Fork pull requests are skipped: they get no secrets,
+and running fork code on a self-hosted runner is not something to arrange by
+accident.

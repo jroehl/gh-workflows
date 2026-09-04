@@ -1,0 +1,68 @@
+name: Cross-model PR review
+description: Run the pr-critic adversarial review on a pull request and post the surviving findings.
+
+inputs:
+  pr:
+    description: Pull request number.
+    required: true
+  openrouter-api-key:
+    description: OpenRouter key. Each owner supplies its own.
+    required: true
+  github-token:
+    description: Token used to read the PR and post the review.
+    required: true
+  base:
+    description: Base ref to diff against. Defaults to the PR's own base.
+    required: false
+    default: ""
+  critic-model:
+    required: false
+    default: openai/gpt-5.1-codex
+  refuter-model:
+    required: false
+    default: google/gemini-3.1-pro-preview
+  post:
+    description: Post the review. Set false to only produce the JSON artifact.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Review
+      shell: bash
+      env:
+        OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr }}
+        BASE: ${{ inputs.base }}
+        CRITIC: ${{ inputs.critic-model }}
+        REFUTER: ${{ inputs.refuter-model }}
+        POST: ${{ inputs.post }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        base="${BASE:-origin/${GITHUB_BASE_REF:-main}}"
+        args=(--base "$base" --pr "$PR" --repo "$REPO"
+              --critic-model "$CRITIC" --refuter-model "$REFUTER"
+              --json pr-critic.json)
+        # Under set -e a bare test that returns 1 would end the step, so this is
+        # written as a full if.
+        if [ "$POST" = "true" ]; then args+=(--post); fi
+        # The review is advisory, so a model outage or a rate limit must not turn
+        # someone's pull request red.
+        npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}" "${args[@]}" || {
+          echo "::warning::pr-critic did not complete; no review was posted."
+          exit 0
+        }
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pr-critic-${{ inputs.pr }}
+        path: pr-critic.json
+        if-no-files-found: ignore
