@@ -45,7 +45,7 @@ jobs:
           # The critic diffs against the merge base, which needs real history.
           fetch-depth: 0
 
-      - uses: jroehl/gh-workflows/review@main
+      - uses: jroehl/gh-workflows@main
         with:
           pr: ${{ github.event.pull_request.number }}
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}

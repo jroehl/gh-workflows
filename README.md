@@ -98,3 +98,8 @@ Where org secrets do not reach private repositories (GitHub Free), the key is a
 repository secret instead. Fork pull requests are skipped: they get no secrets,
 and running fork code on a self-hosted runner is not something to arrange by
 accident.
+
+An org that restricts Actions to an allowlist needs `jroehl/gh-workflows@*` on it.
+The action sits at the repo root for exactly that reason: a pattern of that shape
+does not match an action in a subdirectory, and the refusal arrives as a
+`startup_failure` with no log, no annotation and no check run.
