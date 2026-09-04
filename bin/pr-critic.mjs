@@ -4,6 +4,7 @@ import { writeFileSync } from "node:fs";
 import { collectContext, fetchPrIntent } from "../src/context.mjs";
 import { runCritic } from "../src/critic.mjs";
 import { runRefute } from "../src/refute.mjs";
+import { postReview } from "../src/post.mjs";
 
 const DEFAULTS = {
   // Cross-family by design: the critic is not an Anthropic model, and the refuter
@@ -25,6 +26,7 @@ function parseArgs(argv) {
     else if (a === "--json") out.json = next();
     else if (a === "--exclude") out.excludes.push(next());
     else if (a === "--keep-unproven") out.keepUnproven = true;
+    else if (a === "--post") out.post = true;
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
   }
@@ -39,9 +41,20 @@ const USAGE = `pr-critic --base <ref> [--pr <n> --repo <owner/name>] [options]
   --refuter-model <id>    default ${DEFAULTS.refuter}
   --exclude <pathspec>    extra path to leave out of the diff (repeatable)
   --keep-unproven         keep findings the refuter could not settle
+  --post                  publish survivors as one GitHub review (needs GITHUB_TOKEN)
   --json <path>           also write the full result as JSON
 
 Needs OPENROUTER_API_KEY. Prints surviving findings as JSON on stdout.`;
+
+function inferRepo(cwd) {
+  try {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], { cwd, encoding: "utf8" }).trim();
+    const m = /github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?$/.exec(url);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
 
 function defaultBase(cwd) {
   for (const ref of ["origin/HEAD", "origin/main", "main", "origin/master", "master"]) {
@@ -74,8 +87,9 @@ async function main() {
     return 0;
   }
 
+  const repo = args.repo ?? inferRepo(cwd);
   const prIntent = await fetchPrIntent({
-    repo: args.repo,
+    repo,
     pr: args.pr,
     token: process.env.GITHUB_TOKEN,
   });
@@ -111,6 +125,25 @@ async function main() {
       usage: { critic: critic.usage, refuter: refute.usage },
     },
   };
+
+  if (args.post) {
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) throw new Error("--post needs GITHUB_TOKEN");
+    if (!repo || !args.pr) throw new Error("--post needs --pr and a resolvable repo");
+    const posted = await postReview({
+      repo,
+      pr: args.pr,
+      token,
+      diff: context.diff,
+      findings: survivors,
+      meta: result.meta,
+    });
+    result.posted = posted;
+    console.error(
+      `posted review ${posted.id}: ${posted.inline} inline, ${posted.orphans} in summary` +
+        (posted.degraded ? " (degraded: an anchor was rejected)" : ""),
+    );
+  }
 
   const text = JSON.stringify(result, null, 2);
   if (args.json) writeFileSync(args.json, text);
