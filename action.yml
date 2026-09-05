@@ -17,7 +17,11 @@ inputs:
     default: ""
   critic-model:
     required: false
-    default: openai/gpt-5.1-codex
+    default: x-ai/grok-4.3
+  critic-fallback-model:
+    description: Critic used when the first one fails. Empty string to disable.
+    required: false
+    default: openai/gpt-5.1
   refuter-model:
     required: false
     default: google/gemini-3.1-pro-preview
@@ -41,6 +45,7 @@ runs:
         PR: ${{ inputs.pr }}
         BASE: ${{ inputs.base }}
         CRITIC: ${{ inputs.critic-model }}
+        CRITIC_FALLBACK: ${{ inputs.critic-fallback-model }}
         REFUTER: ${{ inputs.refuter-model }}
         POST: ${{ inputs.post }}
         REPO: ${{ github.repository }}
@@ -48,24 +53,32 @@ runs:
         set -euo pipefail
         base="${BASE:-origin/${GITHUB_BASE_REF:-main}}"
         args=(--base "$base" --pr "$PR" --repo "$REPO"
-              --critic-model "$CRITIC" --refuter-model "$REFUTER"
+              --critic-model "$CRITIC" --critic-fallback-model "$CRITIC_FALLBACK"
+              --refuter-model "$REFUTER"
               --json pr-critic.json)
         # Under set -e a bare test that returns 1 would end the step, so this is
         # written as a full if.
         if [ "$POST" = "true" ]; then args+=(--post); fi
-        # A transient model outage must not turn someone's pull request red. Exit 3
-        # is the other kind: credit exhausted or the key is dead, so no review will
-        # run again anywhere until someone acts. That one fails the check, because a
-        # warning in a collapsed log is indistinguishable from a clean review.
+        # A transient model outage must not turn someone's pull request red, so this
+        # still exits 0. The visibility comes from the pull request instead: the CLI
+        # posts a comment saying no review ran before it exits, because a warning in a
+        # collapsed log is indistinguishable from a clean review. Exit 3 is the other
+        # kind: credit exhausted or the key is dead, so no review will run again
+        # anywhere until someone acts, and that one fails the check.
+        # The action's own checkout, not a fresh npx install: GITHUB_ACTION_PATH is
+        # this action at the ref that called it, so a pinned SHA pins the CLI too.
+        # Installing from a ref instead let action.yml and the CLI drift apart, and
+        # `uses: ./` has no ref to install at, so this repo reviewed its own pull
+        # requests with the code on main. There are no runtime dependencies.
         set +e
-        npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}" "${args[@]}"
+        node "$GITHUB_ACTION_PATH/bin/pr-critic.mjs" "${args[@]}"
         rc=$?
         set -e
         if [ "$rc" -eq 3 ]; then
           echo "::error::pr-critic could not authenticate to OpenRouter (credit exhausted or key revoked). No review ran, and none will until the key is replaced."
           exit 1
         elif [ "$rc" -ne 0 ]; then
-          echo "::warning::pr-critic did not complete; no review was posted."
+          echo "::warning::pr-critic did not complete; no review was posted. A comment saying so is on the pull request."
           exit 0
         fi
 

@@ -2,7 +2,12 @@ const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
 // Reasoning models degrade when pinned to temperature 0, so temperature is never
 // sent and the model's own default stands.
-export async function complete({ model, system, user, maxTokens = 8000 }) {
+//
+// The budget is shared with reasoning tokens. At 8000, gpt-5.1-codex spent the whole
+// allowance thinking, was cut off before writing a character, and returned an empty
+// string that read exactly like a clean review. OpenRouter bills tokens actually
+// produced, so a ceiling this high costs nothing until something needs it.
+export async function complete({ model, system, user, maxTokens = 32_000 }) {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("OPENROUTER_API_KEY is not set");
 
@@ -34,8 +39,17 @@ export async function complete({ model, system, user, maxTokens = 8000 }) {
     throw err;
   }
   const body = await res.json();
-  const text = body.choices?.[0]?.message?.content;
-  if (!text) throw new Error("OpenRouter returned no content");
+  const choice = body.choices?.[0];
+  const text = choice?.message?.content;
+  if (!text) {
+    // Which of the two it was decides whether raising the budget would help, and
+    // this message is what the pull request comment ends up quoting.
+    const why =
+      choice?.finish_reason === "length"
+        ? `it used the whole ${maxTokens}-token budget on reasoning and was cut off`
+        : `finish_reason ${choice?.finish_reason ?? "unknown"}`;
+    throw new Error(`${model} returned no content: ${why}`);
+  }
   return { text, usage: body.usage ?? {}, model: body.model ?? model };
 }
 

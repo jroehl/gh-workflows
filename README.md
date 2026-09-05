@@ -38,7 +38,10 @@ pr-critic --base <ref> [--pr <n> --repo <owner/name>] [options]
 
   --base <ref>            base to diff against (default: origin/HEAD, then main)
   --pr <n> --repo <o/r>   fetch the PR title and body as the stated intent
-  --critic-model <id>     default openai/gpt-5.1-codex
+  --critic-model <id>     default x-ai/grok-4.3
+  --critic-fallback-model <id>
+                          used when the critic fails; default openai/gpt-5.1,
+                          empty string to disable
   --refuter-model <id>    default google/gemini-3.1-pro-preview
   --exclude <pathspec>    extra path to leave out of the diff (repeatable)
   --keep-unproven         keep findings the refuter could not settle
@@ -49,8 +52,16 @@ Surviving findings go to stdout as JSON; progress goes to stderr. Findings the
 refuter killed stay in the payload under `dismissed` with the reason, because a
 finding that disappears without a reason is worse than one that was wrong.
 
-Roughly 8-15 cents per review at the default models, most of it the critic's
+Roughly 3-6 cents per review at the default models, most of it the critic's
 reasoning tokens.
+
+## When no review runs
+
+A critic that answers with an empty string looks the same as a clean review, so a
+failed run says so out loud. The fallback critic gets a turn first; if that fails
+too, the run posts a comment on the pull request naming the models it called and
+the error, and removes it again once a review lands. CI stays green either way,
+because a model outage is not the author's problem to fix.
 
 ## Choosing models
 
@@ -60,8 +71,14 @@ that depended on code outside the diff, `gemini-3.1-flash-lite` confirmed it whi
 `gemini-3.1-pro-preview` correctly returned UNPROVEN. The refuter is the wrong place
 to save money.
 
-`--critic-model openai/gpt-5.1-codex` is the Codex model at API pricing, which is
-usually cheaper than spending a Codex plan's quota on the same review.
+The critic, its fallback and the refuter are three different families, so the
+separation survives the run where the first critic fails.
+
+`openai/gpt-5.1-codex` was the default until it reviewed nothing for a day. It is a
+capable critic but an expensive one: on a 42k-character diff it spent 24k reasoning
+tokens and 25 cents, against 724 tokens and 1.6 cents for `x-ai/grok-4.3`. Budget for
+it if you pick it: the token ceiling is shared with reasoning, and a critic that runs
+out of ceiling returns an empty string rather than an error.
 
 [arXiv 2408.10495]: https://arxiv.org/abs/2408.10495
 [NeurIPS 2024]: https://arxiv.org/abs/2404.13076
