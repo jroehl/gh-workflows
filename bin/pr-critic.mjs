@@ -4,12 +4,14 @@ import { writeFileSync } from "node:fs";
 import { collectContext, fetchPrIntent } from "../src/context.mjs";
 import { runCritic } from "../src/critic.mjs";
 import { runRefute } from "../src/refute.mjs";
-import { postReview } from "../src/post.mjs";
+import { postReview, postNoReviewNotice, clearNoReviewNotice } from "../src/post.mjs";
 
 const DEFAULTS = {
   // Cross-family by design: the critic is not an Anthropic model, and the refuter
-  // is not the critic's family either.
-  critic: "openai/gpt-5.1-codex",
+  // is not the critic's family either. The fallback is a third family, so the
+  // separation still holds on the run where the first critic fails.
+  critic: "x-ai/grok-4.3",
+  criticFallback: "openai/gpt-5.1",
   refuter: "google/gemini-3.1-pro-preview",
 };
 
@@ -22,6 +24,7 @@ function parseArgs(argv) {
     else if (a === "--pr") out.pr = next();
     else if (a === "--repo") out.repo = next();
     else if (a === "--critic-model") out.critic = next();
+    else if (a === "--critic-fallback-model") out.criticFallback = next();
     else if (a === "--refuter-model") out.refuter = next();
     else if (a === "--json") out.json = next();
     else if (a === "--exclude") out.excludes.push(next());
@@ -38,6 +41,9 @@ const USAGE = `pr-critic --base <ref> [--pr <n> --repo <owner/name>] [options]
   --base <ref>            base to diff against (default: origin/HEAD, then main)
   --pr <n> --repo <o/r>   fetch the PR title+body as the stated intent
   --critic-model <id>     default ${DEFAULTS.critic}
+  --critic-fallback-model <id>
+                          used when the critic fails; default ${DEFAULTS.criticFallback},
+                          empty string to disable
   --refuter-model <id>    default ${DEFAULTS.refuter}
   --exclude <pathspec>    extra path to leave out of the diff (repeatable)
   --keep-unproven         keep findings the refuter could not settle
@@ -68,6 +74,19 @@ function defaultBase(cwd) {
   return "main";
 }
 
+// The job stays green on a model outage, so the pull request is the only place the
+// absence of a review can be seen. Never let this throw over the real failure.
+async function announceNoReview({ repo, pr, post, stage, models, reason }) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!post || !repo || !pr || !token) return;
+  try {
+    const notice = await postNoReviewNotice({ repo, pr, token, stage, models, reason });
+    console.error(`posted "no review ran" notice ${notice.id}`);
+  } catch (e) {
+    console.error(`could not post the "no review ran" notice: ${e.message}`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -78,6 +97,7 @@ async function main() {
   const cwd = process.cwd();
   const base = args.base ?? defaultBase(cwd);
   const criticModel = args.critic ?? DEFAULTS.critic;
+  const fallbackModel = (args.criticFallback ?? DEFAULTS.criticFallback) || null;
   const refuterModel = args.refuter ?? DEFAULTS.refuter;
 
   const context = collectContext({ base, cwd, excludes: args.excludes });
@@ -96,10 +116,39 @@ async function main() {
   const intent = prIntent ? `${prIntent.title}\n\n${prIntent.body}` : context.commits;
 
   console.error(`base=${base} critic=${criticModel} refuter=${refuterModel}`);
-  const critic = await runCritic({ model: criticModel, context, intent });
-  console.error(`critic: ${critic.findings.length} finding(s)`);
 
-  const refute = await runRefute({ model: refuterModel, context, findings: critic.findings });
+  let attempted = [criticModel];
+  let critic;
+  let refute;
+  let stage = "critic";
+  try {
+    try {
+      critic = await runCritic({ model: criticModel, context, intent });
+    } catch (err) {
+      // A dead key will fail the same way on any model, so only a model-specific
+      // failure is worth a second call.
+      if (err.fatal || !fallbackModel) throw err;
+      console.error(`critic ${criticModel} failed: ${err.message}`);
+      console.error(`retrying with ${fallbackModel}`);
+      attempted.push(fallbackModel);
+      critic = await runCritic({ model: fallbackModel, context, intent });
+    }
+    console.error(`critic: ${critic.findings.length} finding(s)`);
+    stage = "refuter";
+    attempted = [refuterModel];
+    refute = await runRefute({ model: refuterModel, context, findings: critic.findings });
+  } catch (err) {
+    await announceNoReview({
+      repo,
+      pr: args.pr,
+      post: args.post,
+      stage,
+      models: attempted,
+      reason: err.message,
+    });
+    throw err;
+  }
+
   const byIndex = new Map(refute.verdicts.map((v) => [v.index, v]));
 
   const judged = critic.findings.map((f, i) => {
@@ -143,6 +192,12 @@ async function main() {
       `posted review ${posted.id}: ${posted.inline} inline, ${posted.orphans} in summary` +
         (posted.degraded ? " (degraded: an anchor was rejected)" : ""),
     );
+    try {
+      const cleared = await clearNoReviewNotice({ repo, pr: args.pr, token });
+      if (cleared) console.error(`removed the stale "no review ran" notice ${cleared}`);
+    } catch (e) {
+      console.error(`could not remove the stale "no review ran" notice: ${e.message}`);
+    }
   }
 
   const text = JSON.stringify(result, null, 2);
