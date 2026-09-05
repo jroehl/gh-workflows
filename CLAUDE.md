@@ -47,9 +47,12 @@ usage block; all three have to move together.
 OPENROUTER_API_KEY="$(mint openrouter --limit 5)" node bin/pr-critic.mjs --base origin/main
 ```
 
-On CT110 `mint` writes the token to stderr rather than stdout, so that substitution yields
-an empty string and a naive `2>&1` prints the key into the transcript. Redirect the whole
-stream into a `chmod 600` file, and `mint revoke openrouter` afterwards.
+That line works from a shell script. Typed straight into an agent's Bash call it does not:
+the harness scrubs secret-shaped strings out of a command's stdout before the redirect or
+the substitution sees it, so `sk-or-v1-<64 hex>` arrives truncated to `sk-or-v1-` and the
+key silently fails to authenticate. `mint` itself is fine, one line on stdout, nothing on
+stderr. Put the `mint` call inside a script the agent invokes, and the full token comes
+through. `mint revoke openrouter` afterwards, always.
 
 The CLI needs commits: `collectContext` diffs `base...HEAD` between trees, so uncommitted
 work is invisible to it. To review another repo's PR without touching a working copy, clone
