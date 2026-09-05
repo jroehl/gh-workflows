@@ -65,8 +65,13 @@ runs:
         # collapsed log is indistinguishable from a clean review. Exit 3 is the other
         # kind: credit exhausted or the key is dead, so no review will run again
         # anywhere until someone acts, and that one fails the check.
+        # The action's own checkout, not a fresh npx install: GITHUB_ACTION_PATH is
+        # this action at the ref that called it, so a pinned SHA pins the CLI too.
+        # Installing from a ref instead let action.yml and the CLI drift apart, and
+        # `uses: ./` has no ref to install at, so this repo reviewed its own pull
+        # requests with the code on main. There are no runtime dependencies.
         set +e
-        npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}" "${args[@]}"
+        node "$GITHUB_ACTION_PATH/bin/pr-critic.mjs" "${args[@]}"
         rc=$?
         set -e
         if [ "$rc" -eq 3 ]; then
