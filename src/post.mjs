@@ -4,8 +4,8 @@ const MARKER = "<!-- pr-critic -->";
 const NOTICE_MARKER = "<!-- pr-critic:no-review -->";
 const API = "https://api.github.com";
 
-async function gh(path, { token, method = "GET", body } = {}) {
-  const res = await fetch(`${API}${path}`, {
+async function request(url, { token, method = "GET", body } = {}) {
+  const res = await fetch(url, {
     method,
     headers: {
       Accept: "application/vnd.github+json",
@@ -15,8 +15,36 @@ async function gh(path, { token, method = "GET", body } = {}) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`GitHub ${method} ${path} -> ${res.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(`GitHub ${method} ${url} -> ${res.status}: ${text.slice(0, 300)}`);
+  return { data: text ? JSON.parse(text) : null, link: res.headers.get("link") };
+}
+
+async function gh(path, opts) {
+  return (await request(`${API}${path}`, opts)).data;
+}
+
+function nextLink(link) {
+  return /<([^>]+)>;\s*rel="next"/.exec(link ?? "")?.[1] ?? null;
+}
+
+// Every list endpoint defaults to 30 items, and a list read that stops at page one
+// looks exactly like a short list: on a PR with 40 reviews the review just posted was
+// "not on the PR". So lists are always walked to the end through the Link header,
+// the only paging GitHub promises; some endpoints page by cursor.
+async function* ghPages(path, { token, maxPages = Infinity } = {}) {
+  const sep = path.includes("?") ? "&" : "?";
+  let url = `${API}${path}${sep}per_page=100`;
+  for (let n = 0; url && n < maxPages; n++) {
+    const { data, link } = await request(url, { token });
+    yield data;
+    url = nextLink(link);
+  }
+}
+
+async function ghAll(path, opts) {
+  const all = [];
+  for await (const batch of ghPages(path, opts)) all.push(...batch);
+  return all;
 }
 
 function severityMark(s) {
@@ -60,11 +88,9 @@ function summaryBody({ findings, orphans, meta }) {
 // later page. Ten pages is a thousand comments; past that, a duplicate notice is a
 // better outcome than an unbounded walk.
 async function findNotice({ repo, pr, token }) {
-  for (let page = 1; page <= 10; page++) {
-    const batch = await gh(`/repos/${repo}/issues/${pr}/comments?per_page=100&page=${page}`, { token });
+  for await (const batch of ghPages(`/repos/${repo}/issues/${pr}/comments`, { token, maxPages: 10 })) {
     const hit = batch.find((c) => c.body?.includes(NOTICE_MARKER));
     if (hit) return hit;
-    if (batch.length < 100) return null;
   }
   return null;
 }
@@ -134,7 +160,7 @@ export async function postReview({ repo, pr, token, diff, findings, meta }) {
   }
 
   // A 201 is not proof the review is on the PR: re-read it.
-  const reviews = await gh(`/repos/${repo}/pulls/${pr}/reviews`, { token });
+  const reviews = await ghAll(`/repos/${repo}/pulls/${pr}/reviews`, { token });
   const landed = reviews.some((r) => r.id === created.id);
   if (!landed) throw new Error(`review ${created.id} was created but is not on the PR`);
 
