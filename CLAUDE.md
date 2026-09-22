@@ -8,7 +8,7 @@ This file is the parts that are easy to get wrong.
 ## Changes here do not reach anyone until three repos move
 
 Consumers pin this action by SHA, so a merge to `main` changes nothing for them. As of
-2026-09-05 all three sit at `e32c63f`, each in `.github/workflows/pr-review.yml`:
+2026-09-22 all three sit at `2af858c`, each in `.github/workflows/pr-review.yml`:
 
 - `HINTERLAND-software/homelab` (main)
 - `HINTERLAND-software/infrastructure` (main)
