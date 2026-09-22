@@ -59,6 +59,14 @@ work is invisible to it. To review another repo's PR without touching a working 
 with `--filter=blob:none --no-checkout`, `git fetch origin refs/pull/N/head:refs/pr/N`, then
 `git update-ref HEAD refs/pr/N`. A tree-to-tree diff needs no checked-out files.
 
+## GitHub list reads walk every page
+
+A list endpoint returns 30 items by default, and a read that stops at page one looks like a
+short list. On `homelab#344` (40 reviews) that made the post-check report the review it had
+just created as missing. Read lists through `ghPages`/`ghAll` in `src/post.mjs`, which ask
+for 100 per page and follow the `Link` header; never call `gh()` on a list. `npm test`
+checks this offline against a fake API that pages the way GitHub does.
+
 ## System gotchas
 
 - [pr-critic action contract](.claude/rules/pr-critic-action.md) — why the step runs

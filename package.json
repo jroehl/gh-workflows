@@ -7,6 +7,9 @@
     "pr-critic": "bin/pr-critic.mjs",
     "gh-workflows": "bin/pr-critic.mjs"
   },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
   "engines": {
     "node": ">=20"
   },
