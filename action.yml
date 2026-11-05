@@ -33,9 +33,43 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
-      with:
-        node-version: "22"
+    # Not actions/setup-node: on the self-hosted runners that serve most consumers it
+    # extracts into a temp dir and copies into the tool cache, ~0.46 GB of SSD writes
+    # per review for a CLI with no dependencies. The binary alone is enough.
+    - name: Node
+      shell: bash
+      env:
+        NODE_VERSION: "22.23.4"
+      run: |
+        set -euo pipefail
+        if command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ]; then
+          echo "using $(command -v node) $(node --version)"
+          exit 0
+        fi
+        case "$RUNNER_OS" in
+          Linux) os=linux; sha=(sha256sum) ;;
+          macOS) os=darwin; sha=(shasum -a 256) ;;
+          *) echo "::error::no node >= 20 on this $RUNNER_OS runner"; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64) arch=x64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch $RUNNER_ARCH"; exit 1 ;;
+        esac
+        top="node-v${NODE_VERSION}-${os}-${arch}"
+        file="${top}.tar.xz"
+        dl="$RUNNER_TEMP/pr-critic-node"
+        rm -rf "$dl"
+        mkdir -p "$dl/bin"
+        base="https://nodejs.org/dist/v${NODE_VERSION}"
+        curl -fsSL --retry 3 -o "$dl/$file" "$base/$file"
+        curl -fsSL --retry 3 -o "$dl/SHASUMS256.txt" "$base/SHASUMS256.txt"
+        (cd "$dl" && grep "  ${file}\$" SHASUMS256.txt | "${sha[@]}" -c --strict -) ||
+          { echo "::error::checksum mismatch for ${file}"; exit 1; }
+        tar -xJf "$dl/$file" -C "$dl/bin" --strip-components=2 "$top/bin/node"
+        rm -f "$dl/$file" "$dl/SHASUMS256.txt"
+        echo "$dl/bin" >> "$GITHUB_PATH"
+        "$dl/bin/node" --version
 
     - name: Review
       shell: bash
