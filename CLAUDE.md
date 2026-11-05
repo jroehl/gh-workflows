@@ -5,20 +5,21 @@ refuter from another family attacks each finding, survivors are posted as one Gi
 review. `README.md` carries the research the design rests on and the user-facing flags.
 This file is the parts that are easy to get wrong.
 
-## Changes here do not reach anyone until three repos move
+## Changes here do not reach anyone until fourteen repos move
 
-Consumers pin this action by SHA, so a merge to `main` changes nothing for them. As of
-2026-09-22 all three sit at `2af858c`, each in `.github/workflows/pr-review.yml`:
+Consumers pin this action by SHA, so a merge to `main` changes nothing for them. This file
+listed three of them until 2026-11-05, when a code search found fourteen, half of them on an
+older pin. Find them with `gh search code 'jroehl/gh-workflows' --owner HINTERLAND-software`
+rather than trusting a list. On 2026-11-05 every one got a PR moving it to `968b32d` in
+`.github/workflows/pr-review.yml`: homelab (merged), infrastructure, frooma, meal-planner,
+Dalbi, five-minutes, the two `lambda.*-estate-api` repos and four `web.*` sites on `main`,
+plus web.giga-hamburg and simple-frame on **staging**, which reach main on their next
+promotion.
 
-- `HINTERLAND-software/homelab` (main)
-- `HINTERLAND-software/infrastructure` (main)
-- `HINTERLAND-software/web.giga-hamburg` (**staging**, which is ahead of main; it reaches
-  main on the next promotion)
-
-Renovate offers the digest bump on giga only, monthly and without automerge. The other two
-run Dependabot, which resolves actions to releases or tags; this repo has neither, so a
-branch-pinned SHA is invisible to it and those two are bumped by hand. Tagging releases
-would change that.
+Renovate offers the digest bump on giga only, monthly and without automerge. The others run
+Dependabot, which resolves actions to releases or tags; this repo has neither, so a
+branch-pinned SHA is invisible to it and they are bumped by hand. Tagging releases would
+change that.
 
 This repo's own `.github/workflows/pr-review.yml` uses `uses: ./` and needs no bump.
 
