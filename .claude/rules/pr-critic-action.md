@@ -11,7 +11,7 @@ consumers touch, and the ways it can go wrong all look like success.
 
 ## Run the action's own checkout, never an install from a ref
 
-`action.yml:74` runs `node "$GITHUB_ACTION_PATH/bin/pr-critic.mjs"`. It used to run
+`action.yml:104` runs `node "$GITHUB_ACTION_PATH/bin/pr-critic.mjs"`. It used to run
 `npx --yes "github:jroehl/gh-workflows#${{ github.action_ref || 'main' }}"`, which took
 `action.yml` from the calling ref and the CLI from whatever that ref resolved to. Under
 `uses: ./` there is no `action_ref` at all, so it fell back to `main` and this repo
@@ -23,9 +23,18 @@ check went green.
 logic too. `package.json` has no `dependencies`, so there is nothing to install; keep it
 that way, or this line needs an install step and the guarantee weakens.
 
+## Node comes from nodejs.org, not actions/setup-node
+
+The `Node` step uses a `node` >= 20 already on PATH, and otherwise downloads one pinned
+release, checks it against `SHASUMS256.txt` and unpacks `bin/node` alone into
+`$RUNNER_TEMP`. setup-node wrote ~0.46 GB per review into the tool cache of the self-hosted
+runners, whose SSD is wearing out; this writes ~120 MB. It only works because the CLI has
+no dependencies (see above). Bump `NODE_VERSION` by hand, and only to a version the
+nodejs.org dist index lists, or every review fails at the download.
+
 ## Exit codes decide what the check says
 
-`action.yml:77` onward. Exit 3 is a dead or exhausted OpenRouter key: no review will run
+`action.yml:107` onward. Exit 3 is a dead or exhausted OpenRouter key: no review will run
 anywhere until someone acts, so it becomes `::error::` and fails the check. Any other
 non-zero exit is a model-level failure and stays green with a `::warning::`, because an
 outage must not turn someone's pull request red.
