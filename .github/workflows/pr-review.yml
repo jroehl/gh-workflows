@@ -17,10 +17,12 @@ permissions:
 
 jobs:
   review:
-    # A fork PR gets no secrets, so there is nothing to run.
+    # A fork PR gets no secrets, so there is nothing to run. A PR labelled
+    # `no-critic` must not leave GitHub: its diff never goes to OpenRouter.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'no-critic')
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
