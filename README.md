@@ -116,6 +116,27 @@ repository secret instead. Fork pull requests are skipped: they get no secrets,
 and running fork code on a self-hosted runner is not something to arrange by
 accident.
 
+### Keeping a PR away from the critic
+
+A PR labelled `no-critic` should never have its diff sent to OpenRouter, for example a
+fix for a security finding that is not public yet. The label has to be on the PR when it
+opens, because the `opened` event carries the labels it was created with. Each caller
+checks it in its own job condition, on both the PR path and the `/critic` comment path:
+
+```yaml
+    if: >-
+      (github.event_name == 'pull_request' &&
+       !contains(github.event.pull_request.labels.*.name, 'no-critic') && ...) ||
+      (github.event_name == 'issue_comment' &&
+       !contains(github.event.issue.labels.*.name, 'no-critic') && ...)
+```
+
+`gh pr create --label` adds the label in a second call, after `opened` has fired, so a
+PR that must stay private opens as a draft (every caller skips drafts) and is marked ready
+only once the label is confirmed; `ready_for_review` carries the current labels.
+`/dev:pr-land --local-only` works that way and refuses a repo whose `pr-review.yml` has no
+uncommented line with the negated `!contains(…, 'no-critic')` check.
+
 An org that restricts Actions to an allowlist needs `jroehl/gh-workflows@*` on it.
 The action sits at the repo root for exactly that reason: a pattern of that shape
 does not match an action in a subdirectory, and the refusal arrives as a
