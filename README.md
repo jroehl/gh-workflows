@@ -131,8 +131,11 @@ checks it in its own job condition, on both the PR path and the `/critic` commen
        !contains(github.event.issue.labels.*.name, 'no-critic') && ...)
 ```
 
-`/dev:pr-land --local-only` opens its PRs with this label and refuses a repo whose
-`pr-review.yml` does not mention `no-critic`.
+`gh pr create --label` adds the label in a second call, after `opened` has fired, so a
+PR that must stay private opens as a draft (every caller skips drafts) and is marked ready
+only once the label is confirmed; `ready_for_review` carries the current labels.
+`/dev:pr-land --local-only` works that way and refuses a repo whose `pr-review.yml` does
+not mention `no-critic`.
 
 An org that restricts Actions to an allowlist needs `jroehl/gh-workflows@*` on it.
 The action sits at the repo root for exactly that reason: a pattern of that shape
