@@ -39,15 +39,17 @@ The end of the `Review` step maps the CLI's exit code:
 | Exit | Cause | Check | On the PR |
 |---|---|---|---|
 | 0 | a review was posted, or the diff was skipped (`meta.skipped`) | green | the review; a skipped diff posts nothing and removes a stale notice |
-| 1 | every link of a chain failed (outage, quota, unusable answer), or the cost cap stopped the run | green, `::warning::` | "no review ran" notice naming the stage and the error |
+| 1 | every link of a chain failed (outage, quota, unusable answer, no link fits the cost cap), or posting the review failed | green, `::warning::` | "no review ran" notice naming the stage and the error; after a failed post it points at the `pr-critic.json` artifact, which holds the findings |
 | 3 | a config error (model off the allowlist, family rule, empty chain, bad `--max-cost`), or a key rejected on the last link of its chain (OpenRouter credit exhausted, a revoked key) | red, `::error::` | "no review ran" notice; stage `config` for a config error |
 
 Exit 3 will not fix itself, so it fails the check. Everything else is an outage or a budget
 decision, which must not turn someone's pull request red.
 
 The cost cap (`--max-cost`, input `max-cost`, default $0.50 in the CLI) is checked before
-every paid call. When the next call could take the run past it, the run stops with
-`cost_cap`, posts the notice with `cost cap $x reached after <stage>`, and exits 1. A
+every paid call. A link that cannot fit the remaining budget is skipped as `cost_cap` before
+any request and the next, possibly cheaper, link is tried. Only when no link fits does the
+run stop, post the notice with `cost cap $x reached after <stage>`, and exit 1. A call that
+was sent but failed without a usage report is debited its reserved worst case. A
 rejected credit key that is not the last link fails over instead and leaves a
 `::warning::<transport> credit key rejected` plus a line in the review footer.
 
