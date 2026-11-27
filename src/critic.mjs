@@ -1,4 +1,31 @@
-import { complete, parseJson } from "./openrouter.mjs";
+import { complete, parseJson } from "./llm.mjs";
+
+// The answer shape below as a JSON schema, for the transports that can hold a model to
+// one (codex --output-schema, Anthropic structured outputs). Strict-mode rules apply:
+// every property required, no extra properties, a nullable line spelled with anyOf.
+export const CRITIC_SCHEMA = {
+  type: "object",
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          line: { anyOf: [{ type: "integer" }, { type: "null" }] },
+          severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+          claim: { type: "string" },
+          failure_scenario: { type: "string" },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+        },
+        required: ["file", "line", "severity", "claim", "failure_scenario", "confidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["findings"],
+  additionalProperties: false,
+};
 
 const SYSTEM = `You are a hostile code reviewer. You did not write this change and you have
 no access to the author's reasoning: you see only the diff and the stated intent. That
@@ -24,7 +51,32 @@ Answer with JSON only:
 "claim":"one sentence","failure_scenario":"inputs or state -> wrong outcome",
 "confidence":"high|medium|low"}]}`;
 
-export async function runCritic({ model, context, intent }) {
+const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
+
+function shapeError(message) {
+  const err = new Error(`critic answer has the wrong shape: ${message}`);
+  err.code = "shape";
+  return err;
+}
+
+// Valid JSON of the wrong shape used to become an empty findings list, which reads
+// exactly like a clean review. A wrong shape is a failed attempt instead, so the next
+// link in the chain runs.
+export function validateCriticAnswer(parsed) {
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) {
+    throw shapeError("no findings array");
+  }
+  parsed.findings.forEach((f, i) => {
+    if (!f || typeof f !== "object") throw shapeError(`finding ${i} is not an object`);
+    for (const key of ["file", "claim", "failure_scenario"]) {
+      if (typeof f[key] !== "string" || f[key] === "") throw shapeError(`finding ${i} has no ${key} string`);
+    }
+    if (!SEVERITIES.has(f.severity)) throw shapeError(`finding ${i} has severity ${JSON.stringify(f.severity)}`);
+  });
+  return parsed.findings;
+}
+
+export async function runCritic({ model, context, intent, entry, budget, stage = "critic" }) {
   const user = [
     intent ? `## Stated intent\n${intent}` : "## Stated intent\n(none given)",
     `## Files changed\n${context.stat || "(none)"}`,
@@ -32,8 +84,15 @@ export async function runCritic({ model, context, intent }) {
     `## Diff\n${context.diff}`,
   ].join("\n\n");
 
-  const { text, usage, model: used } = await complete({ model, system: SYSTEM, user });
-  const parsed = parseJson(text);
-  const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
-  return { findings, usage, model: used };
+  const { text, usage, cost, model: used, paid_by } = await complete({
+    model,
+    system: SYSTEM,
+    user,
+    schema: CRITIC_SCHEMA,
+    entry,
+    budget,
+    stage,
+  });
+  const findings = validateCriticAnswer(parseJson(text));
+  return { findings, usage, cost, model: used, paid_by };
 }

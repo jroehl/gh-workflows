@@ -1,4 +1,27 @@
-import { complete, parseJson } from "./openrouter.mjs";
+import { complete, parseJson } from "./llm.mjs";
+
+// The answer shape as a JSON schema, for codex --output-schema and Anthropic structured
+// outputs. It cannot say "one verdict per index"; validateRefuteAnswer does.
+export const REFUTE_SCHEMA = {
+  type: "object",
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "integer" },
+          verdict: { type: "string", enum: ["CONFIRMED", "REFUTED", "UNPROVEN"] },
+          reason: { type: "string" },
+        },
+        required: ["index", "verdict", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["verdicts"],
+  additionalProperties: false,
+};
 
 // The refuter runs on a different model family from the critic on purpose: a model
 // asked to check its own output tends to confirm it.
@@ -13,8 +36,39 @@ finding depends on code you cannot see, verdict UNPROVEN, never CONFIRMED.
 Answer with JSON only:
 {"verdicts":[{"index":<int>,"verdict":"CONFIRMED|REFUTED|UNPROVEN","reason":"one sentence"}]}`;
 
-export async function runRefute({ model, context, findings }) {
-  if (findings.length === 0) return { verdicts: [], usage: {}, model };
+const VERDICTS = new Set(["CONFIRMED", "REFUTED", "UNPROVEN"]);
+
+function shapeError(message) {
+  const err = new Error(`refuter answer has the wrong shape: ${message}`);
+  err.code = "shape";
+  return err;
+}
+
+// A missing or misspelled verdict used to turn into UNPROVEN and quietly drop the
+// finding, so a malformed answer could clear a whole review. Exactly one valid verdict
+// per finding, or the attempt failed.
+export function validateRefuteAnswer(parsed, n) {
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.verdicts)) {
+    throw shapeError("no verdicts array");
+  }
+  const seen = new Set();
+  for (const v of parsed.verdicts) {
+    if (!v || typeof v !== "object") throw shapeError("a verdict is not an object");
+    if (!Number.isInteger(v.index) || v.index < 0 || v.index >= n) {
+      throw shapeError(`index ${JSON.stringify(v.index)} is not one of 0..${n - 1}`);
+    }
+    if (seen.has(v.index)) throw shapeError(`duplicate verdict for index ${v.index}`);
+    seen.add(v.index);
+    if (!VERDICTS.has(v.verdict)) throw shapeError(`index ${v.index} has verdict ${JSON.stringify(v.verdict)}`);
+  }
+  for (let i = 0; i < n; i++) if (!seen.has(i)) throw shapeError(`no verdict for index ${i}`);
+  return parsed.verdicts;
+}
+
+// `call` is the transport, swappable so the A/B harness can cache raw answers and
+// replay them, or stand in a refuter that never touches the network.
+export async function runRefute({ model, context, findings, entry, budget, stage = "refuter", call = complete }) {
+  if (findings.length === 0) return { verdicts: [], usage: {}, cost: 0, model };
 
   const list = findings
     .map(
@@ -24,7 +78,15 @@ export async function runRefute({ model, context, findings }) {
     .join("\n");
 
   const user = `## Findings to refute\n${list}\n\n## Diff\n${context.diff}`;
-  const { text, usage, model: used } = await complete({ model, system: SYSTEM, user });
-  const parsed = parseJson(text);
-  return { verdicts: Array.isArray(parsed.verdicts) ? parsed.verdicts : [], usage, model: used };
+  const { text, usage, cost, model: used, paid_by } = await call({
+    model,
+    system: SYSTEM,
+    user,
+    schema: REFUTE_SCHEMA,
+    entry,
+    budget,
+    stage,
+  });
+  const verdicts = validateRefuteAnswer(parseJson(text), findings.length);
+  return { verdicts, usage, cost, model: used, paid_by };
 }

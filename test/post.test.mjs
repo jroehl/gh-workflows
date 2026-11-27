@@ -94,3 +94,41 @@ test("pagination follows the Link header rather than guessing page numbers", asy
   assert.equal(posted.id, 2);
   assert.ok(calls.some((c) => c.includes("after=abc")));
 });
+
+test("the review footer shows the run's total cost, marked when estimated", async () => {
+  let posted;
+  fakeGitHub({
+    [`POST /repos/${repo}/pulls/${pr}/reviews`]: (url, init) => {
+      posted = JSON.parse(init.body);
+      return new Response(JSON.stringify({ id: 1 }), { status: 200 });
+    },
+    [`GET /repos/${repo}/pulls/${pr}/reviews`]: (url) => page([{ id: 1 }], url),
+  });
+  const withCost = {
+    ...meta,
+    cost: { critic: 0.01, fallback: 0, refuter: 0.0234, total: 0.0334, currency: "USD", estimated: true },
+  };
+  await postReview({ repo, pr, token: "t", diff: "", findings: [], meta: withCost });
+  assert.match(posted.body, /Cost: \$0\.0334 \(estimated\)/);
+});
+
+test("an unknown model with --post posts the config notice and exits 3 before any model call", async () => {
+  const { main } = await import("../bin/pr-critic.mjs");
+  const { tempRepo, withEnv } = await import("./helpers.mjs");
+  const cwd = tempRepo();
+  let notice;
+  const calls = fakeGitHub({
+    [`GET /repos/${repo}/issues/${pr}/comments`]: (url) => page([], url),
+    [`POST /repos/${repo}/issues/${pr}/comments`]: (url, init) => {
+      notice = JSON.parse(init.body).body;
+      return new Response(JSON.stringify({ id: 9 }), { status: 201 });
+    },
+  });
+  const argv = ["--base", "HEAD~1", "--post", "--pr", String(pr), "--repo", repo];
+  argv.push("--critic-model", "openai/gpt-6.2-astra-pro");
+  const { result } = await withEnv({ GITHUB_TOKEN: "t" }, () => main({ argv, cwd }));
+  assert.equal(result.code, 3);
+  assert.match(notice, /config step failed/);
+  assert.match(notice, /not on the allowlist/);
+  assert.ok(calls.every((c) => !c.includes("openrouter")), `unexpected calls: ${calls}`);
+});

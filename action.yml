@@ -6,8 +6,22 @@ inputs:
     description: Pull request number.
     required: true
   openrouter-api-key:
-    description: OpenRouter key. Each owner supplies its own.
+    description: >-
+      OpenRouter key. Each owner supplies its own. It carries the critic's second
+      family and every fallback, so it is needed even when the credit keys are set.
     required: true
+  openai-api-key:
+    description: >-
+      Optional. OpenAI API key on included credit; when set, the critic runs on
+      openai: first and falls back to OpenRouter when the credit is spent.
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: >-
+      Optional. Anthropic API key on included credit; when set, the refuter runs on
+      anthropic: first and falls back to OpenRouter when the credit is spent.
+    required: false
+    default: ""
   github-token:
     description: Token used to read the PR and post the review.
     required: true
@@ -16,15 +30,31 @@ inputs:
     required: false
     default: ""
   critic-model:
+    description: Replaces the critic chain in src/models.json. Empty keeps the chain.
     required: false
-    default: x-ai/grok-4.3
+    default: ""
   critic-fallback-model:
-    description: Critic used when the first one fails. Empty string to disable.
+    description: >-
+      Critic used when the first one fails. Empty picks one from another family out of
+      src/models.json.
     required: false
-    default: openai/gpt-5.1
+    default: ""
   refuter-model:
+    description: Replaces the refuter chain in src/models.json. Empty keeps the chain.
     required: false
-    default: google/gemini-3.1-pro-preview
+    default: ""
+  max-cost:
+    description: >-
+      USD ceiling for one run. Empty keeps the CLI default. A run that would pass it
+      stops, posts the "no review ran" notice, and stays green.
+    required: false
+    default: ""
+  no-skip:
+    description: >-
+      "true" reviews even a diff of only documentation or generated files, which is
+      otherwise skipped. Pass it when someone asked for the review, as /critic does.
+    required: false
+    default: "false"
   post:
     description: Post the review. Set false to only produce the JSON artifact.
     required: false
@@ -73,32 +103,42 @@ runs:
 
     - name: Review
       shell: bash
+      # The keys reach the CLI as env only. In argv they would show in the process
+      # list of a shared self-hosted runner.
       env:
         OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         PR: ${{ inputs.pr }}
         BASE: ${{ inputs.base }}
         CRITIC: ${{ inputs.critic-model }}
         CRITIC_FALLBACK: ${{ inputs.critic-fallback-model }}
         REFUTER: ${{ inputs.refuter-model }}
+        MAX_COST: ${{ inputs.max-cost }}
+        NO_SKIP: ${{ inputs.no-skip }}
         POST: ${{ inputs.post }}
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
         base="${BASE:-origin/${GITHUB_BASE_REF:-main}}"
-        args=(--base "$base" --pr "$PR" --repo "$REPO"
-              --critic-model "$CRITIC" --critic-fallback-model "$CRITIC_FALLBACK"
-              --refuter-model "$REFUTER"
-              --json pr-critic.json)
-        # Under set -e a bare test that returns 1 would end the step, so this is
-        # written as a full if.
+        args=(--base "$base" --pr "$PR" --repo "$REPO" --json pr-critic.json)
+        # A model flag is passed only when set, so an unset input leaves the chains in
+        # src/models.json in charge instead of overriding them from here. Under set -e
+        # a bare test that returns 1 would end the step, so each is a full if.
+        if [ -n "$CRITIC" ]; then args+=(--critic-model "$CRITIC"); fi
+        if [ -n "$CRITIC_FALLBACK" ]; then args+=(--critic-fallback-model "$CRITIC_FALLBACK"); fi
+        if [ -n "$REFUTER" ]; then args+=(--refuter-model "$REFUTER"); fi
+        if [ -n "$MAX_COST" ]; then args+=(--max-cost "$MAX_COST"); fi
+        if [ "$NO_SKIP" = "true" ]; then args+=(--no-skip); fi
         if [ "$POST" = "true" ]; then args+=(--post); fi
-        # A transient model outage must not turn someone's pull request red, so this
-        # still exits 0. The visibility comes from the pull request instead: the CLI
-        # posts a comment saying no review ran before it exits, because a warning in a
-        # collapsed log is indistinguishable from a clean review. Exit 3 is the other
-        # kind: credit exhausted or the key is dead, so no review will run again
-        # anywhere until someone acts, and that one fails the check.
+        # A transient model outage, or a run stopped by the cost cap, must not turn
+        # someone's pull request red, so this still exits 0. The visibility comes from
+        # the pull request instead: the CLI posts a comment saying no review ran before
+        # it exits, because a warning in a collapsed log is indistinguishable from a
+        # clean review. Exit 3 is the other kind: a configuration error, or every link
+        # of a chain refused by its key, so no review will run again anywhere until
+        # someone acts, and that one fails the check.
         # The action's own checkout, not a fresh npx install: GITHUB_ACTION_PATH is
         # this action at the ref that called it, so a pinned SHA pins the CLI too.
         # Installing from a ref instead let action.yml and the CLI drift apart, and
@@ -109,7 +149,7 @@ runs:
         rc=$?
         set -e
         if [ "$rc" -eq 3 ]; then
-          echo "::error::pr-critic could not authenticate to OpenRouter (credit exhausted or key revoked). No review ran, and none will until the key is replaced."
+          echo "::error::pr-critic stopped on a configuration error or a key that was rejected on the last link of its chain (OpenRouter credit exhausted, or a key revoked). No review ran, and none will until someone fixes it; the log above and the comment on the pull request name the cause."
           exit 1
         elif [ "$rc" -ne 0 ]; then
           echo "::warning::pr-critic did not complete; no review was posted. A comment saying so is on the pull request."

@@ -80,6 +80,12 @@ function summaryBody({ findings, orphans, meta }) {
     }
     lines.push("");
   }
+  if (meta.cost && typeof meta.cost.total === "number") {
+    lines.push(`Cost: $${meta.cost.total.toFixed(4)}${meta.cost.estimated ? " (estimated)" : ""}`, "");
+  }
+  // A rejected credit key is said here, on the next pull request, rather than after a
+  // month of OpenRouter bills.
+  for (const w of meta.warnings ?? []) lines.push(`⚠️ ${w}`, "");
   lines.push("_Advisory. Nothing here blocks a merge._");
   return lines.join("\n");
 }
@@ -103,7 +109,9 @@ export async function postNoReviewNotice({ repo, pr, token, stage, models, reaso
     NOTICE_MARKER,
     "**Cross-model review did not run.**",
     "",
-    `The ${stage} step failed after calling ${models.map((m) => `\`${m}\``).join(", then ")}.`,
+    models.length
+      ? `The ${stage} step failed after calling ${models.map((m) => `\`${m}\``).join(", then ")}.`
+      : `The ${stage} step failed before calling a model.`,
     "",
     `Last error: ${reason}`,
     "",
