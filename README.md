@@ -115,9 +115,11 @@ A diff where every changed file is plain documentation or generated is not sent 
 model. It posts nothing, removes a stale "no review ran" notice, writes
 `meta.skipped` with the reason, and exits 0. A file counts as:
 
-- documentation when it is `*.md` or `*.mdx`, outside any `.claude/` or `.github/`
-  directory, and not named `AGENTS.md` or `CLAUDE.md`. Those carry instructions for
-  agents or for GitHub, so they are reviewed like code;
+- documentation when it is `*.md` or `*.mdx`, outside any dot-directory (`.claude/`,
+  `.github/`, `.cursor/`, ...) or `prompts/`, `skills/`, `agents/` or `instructions/`
+  directory, and not an agent file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md`,
+  anything with "prompt" in its name). Those carry instructions for agents or for GitHub,
+  so they are reviewed like code. Names match case-insensitively;
 - generated when the base tree's `.gitattributes` marks it `linguist-generated`.
   The attributes are read from the merge base (`git check-attr --source`), never
   from the pull request's checkout, so a pull request cannot mark its own change
