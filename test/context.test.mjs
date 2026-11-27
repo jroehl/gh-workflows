@@ -37,6 +37,16 @@ test("skip: markdown under .github/, and AGENTS.md and CLAUDE.md anywhere, are r
   }
 });
 
+test("skip: markdown for other agents, in any dot-directory or prompt/skill directory, is reviewed", () => {
+  for (const path of [
+    "GEMINI.md", "sub/Agents.MD", "SKILL.md", ".cursor/rules/x.md", ".codex/x.md", ".agents/x.md",
+    ".windsurf/x.md", ".GitHub/x.md", "prompts/review.md", "src/Prompts/x.md", "skills/foo/notes.md",
+    "agents/x.md", "docs/system-prompt.md",
+  ]) {
+    assert.equal(skipOf({}, { [path]: "x\n" }), null, path);
+  }
+});
+
 test("skip: docs in any directory, .mdx included, are skipped", () => {
   assert.ok(skipOf({}, { "docs/guide.mdx": "x\n", "docs/notes/CHANGES.MD": "y\n" }));
 });

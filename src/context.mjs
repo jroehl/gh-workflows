@@ -82,16 +82,18 @@ export function readGenerated({ paths, source, cwd }) {
   return { generated, error: null };
 }
 
-// Markdown that carries instructions for an agent or for GitHub is reviewed like code.
-const INSTRUCTION_DIRS = new Set([".claude", ".github"]);
-const INSTRUCTION_FILES = new Set(["agents.md", "claude.md"]);
+// Markdown that carries instructions for an agent or for GitHub is reviewed like code. Tool
+// config lives in dot-directories (.claude, .github, .cursor, .codex, ...) and new agents keep
+// adding names, so every dot-directory counts, not a list that falls behind.
+const INSTRUCTION_DIRS = new Set(["prompts", "prompt", "skills", "agents", "instructions"]);
+const INSTRUCTION_FILES = new Set(["agents.md", "claude.md", "gemini.md", "skill.md", "copilot-instructions.md"]);
 
 function isPlainDoc(path) {
-  const parts = path.split("/");
-  const name = parts.at(-1).toLowerCase();
+  const parts = path.toLowerCase().split("/");
+  const name = parts.at(-1);
   if (!/\.mdx?$/.test(name)) return false;
-  if (INSTRUCTION_FILES.has(name)) return false;
-  return !parts.slice(0, -1).some((d) => INSTRUCTION_DIRS.has(d));
+  if (INSTRUCTION_FILES.has(name) || name.includes("prompt")) return false;
+  return !parts.slice(0, -1).some((d) => d.startsWith(".") || INSTRUCTION_DIRS.has(d));
 }
 
 // A diff is not worth a model call when every file is plain documentation or marked
