@@ -121,7 +121,7 @@ export async function postNoReviewNotice({ repo, pr, token, stage, models, reaso
     ...(stage === "post"
       ? [
           "The review ran, but posting it failed. Its findings are in this run's artifact",
-          "(`pr-critic-<pr>`, file `pr-critic.json`); re-run the job to post them.",
+          `(\`pr-critic-${pr}\`, file \`pr-critic.json\`); re-run the job to post them.`,
         ]
       : [
           "No finding was produced, so nothing here says the change is clean. Re-run the job, or",

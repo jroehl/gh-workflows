@@ -29,6 +29,8 @@ export class CostCapError extends Error {
   }
 }
 
+const CONNECT_PHASE = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"]);
+
 export class Budget {
   constructor(max) {
     this.max = max;
@@ -54,7 +56,10 @@ export class Budget {
   // A request that was sent and then failed without a usage report (network error,
   // timeout, abort) may still have been billed in full, so it is charged at the worst
   // case it was sized for: the prompt at the input rate plus every planned output token.
-  debitReserved({ entry, system, user, maxTokens, stage }) {
+  // A connect-phase failure (undici reports it as "fetch failed" with the cause's code)
+  // sent nothing, so nothing was billed and charging it would starve the next link.
+  debitReserved({ entry, system, user, maxTokens, stage, error }) {
+    if (CONNECT_PHASE.has(error?.cause?.code)) return 0;
     if (entry?.in_usd_per_m == null || entry?.out_usd_per_m == null) return 0;
     const cost = (estimateInputTokens(system, user) * entry.in_usd_per_m + maxTokens * entry.out_usd_per_m) / 1e6;
     this.debit(stage, cost, true);

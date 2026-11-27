@@ -343,6 +343,7 @@ test("cli: a GitHub 500 on the review POST keeps the survivors in --json, posts 
   assert.match(notice.body.body, /post step failed/);
   assert.match(notice.body.body, /500/);
   assert.match(notice.body.body, /artifact/);
+  assert.match(notice.body.body, /`pr-critic-7`/);
 });
 
 test("cli: --max-cost 0.1 with a big prompt: openai: trips the cap and x-ai/grok-4.3 runs", async () => {
@@ -385,6 +386,28 @@ for (const [name, key] of [
     await withEnv(key, () => assert.rejects(run({ budget, stage: "critic" })));
     assert.ok(Math.abs(budget.spent - reserved) < 1e-12, `spent ${budget.spent}, reserved ${reserved}`);
     assert.equal(budget.estimated, true);
+  });
+
+  test(`${name} a connection that never reached the server debits nothing`, async () => {
+    for (const code of ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"]) {
+      globalThis.fetch = async () => {
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) });
+      };
+      const budget = new Budget(0.5);
+      const entry = name === "anthropic:" ? haiku : name === "openai:" ? sol : resolveModel("openai/gpt-6.1-sol", "critic");
+      const run = name === "openai:" ? oa : name === "anthropic:" ? an : (x) => complete({ model: entry.id, entry, system: "S", user: "U", ...x });
+      await withEnv(key, () => assert.rejects(run({ budget, stage: "critic" })));
+      assert.equal(budget.spent, 0, code);
+    }
+  });
+
+  test(`${name} a body that fails to read after a 200 debits the reserved worst case`, async () => {
+    globalThis.fetch = async () => new Response("{not json", { status: 200, headers: { "content-type": "application/json" } });
+    const budget = new Budget(0.5);
+    const entry = name === "anthropic:" ? haiku : name === "openai:" ? sol : resolveModel("openai/gpt-6.1-sol", "critic");
+    const run = name === "openai:" ? oa : name === "anthropic:" ? an : (x) => complete({ model: entry.id, entry, system: "S", user: "U", ...x });
+    await withEnv(key, () => assert.rejects(run({ budget, stage: "critic" })));
+    assert.ok(budget.spent > 0, `spent ${budget.spent}`);
   });
 }
 

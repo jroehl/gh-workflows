@@ -56,7 +56,7 @@ export async function completeOpenAI({ model, entry, system, user, maxTokens = M
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
-    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage, error: e });
     throw transportError("openai", e.name === "TimeoutError" ? "timeout" : "network", `OpenAI ${model}: ${e.message}`);
   }
 
@@ -72,7 +72,14 @@ export async function completeOpenAI({ model, entry, system, user, maxTokens = M
     throw transportError("openai", code, `OpenAI ${res.status} (${code}): ${redact(raw.slice(0, 400))}`);
   }
 
-  const body = await res.json();
+  let body;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // A 200 whose body broke mid-read was served and billed.
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    throw transportError("openai", "network", `OpenAI ${model}: unreadable response body: ${e.message}`);
+  }
   const choice = body.choices?.[0];
   const text = choice?.message?.content;
   const usage = body.usage ?? {};

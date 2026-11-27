@@ -76,7 +76,7 @@ export async function completeOpenRouter({ model, system, user, maxTokens = MAX_
     });
   } catch (e) {
     // Sent, maybe served and billed, but no usage came back: charge the reservation.
-    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage, error: e });
     throw transportError("openrouter", e.name === "TimeoutError" ? "timeout" : "network", `OpenRouter ${model}: ${e.message}`);
   }
 
@@ -93,7 +93,14 @@ export async function completeOpenRouter({ model, system, user, maxTokens = MAX_
     else if (res.status === 403) err.code = "forbidden";
     throw err;
   }
-  const body = await res.json();
+  let body;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // A 200 whose body broke mid-read was served and billed.
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    throw transportError("openrouter", "network", `OpenRouter ${model}: unreadable response body: ${e.message}`);
+  }
   const choice = body.choices?.[0];
   const text = choice?.message?.content;
   const usage = body.usage ?? {};

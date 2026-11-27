@@ -50,7 +50,8 @@ export function familyOf(id) {
 function assertFixedVendor(id) {
   const slash = id.indexOf("/");
   const vendor = slash > 0 ? id.slice(0, slash).toLowerCase() : "";
-  if (id.startsWith("~") || vendor === "openrouter" || (slash > 0 && id.slice(slash).includes(":"))) {
+  // An @preset/<slug> (alone or appended) lets the preset pick the model.
+  if (id.startsWith("~") || id.includes("@") || vendor === "openrouter" || (slash > 0 && id.slice(slash).includes(":"))) {
     throw new ConfigError(`${id}: lets OpenRouter choose the model or its price; name a fixed vendor/model ID`);
   }
 }

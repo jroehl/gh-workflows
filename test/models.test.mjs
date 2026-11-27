@@ -30,7 +30,10 @@ test("IDs that let OpenRouter pick the vendor are refused as a critic, even with
   } finally {
     globalThis.fetch = realFetch;
   }
-  for (const id of ["openrouter/auto", "~anthropic/claude-x", "x-ai/grok-4.3:nitro", "openai/gpt-6.1-sol:floor"]) {
+  for (const id of [
+    "openrouter/auto", "~anthropic/claude-x", "x-ai/grok-4.3:nitro", "openai/gpt-6.1-sol:floor",
+    "@preset/x", "x-ai/grok-4.3@preset/x",
+  ]) {
     assert.throws(() => resolveModel(id, "critic", { allowAny: true }), /OpenRouter/, id);
     assert.throws(() => resolveModel(id, "critic"), /OpenRouter/, id);
   }

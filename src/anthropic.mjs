@@ -49,7 +49,7 @@ export async function completeAnthropic({ model, entry, system, user, schema, ma
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
-    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage, error: e });
     throw transportError("anthropic", e.name === "TimeoutError" ? "timeout" : "network", `Anthropic ${model}: ${e.message}`);
   }
 
@@ -65,7 +65,14 @@ export async function completeAnthropic({ model, entry, system, user, schema, ma
     throw transportError("anthropic", code, `Anthropic ${res.status} (${code}): ${redact(raw.slice(0, 400))}`);
   }
 
-  const body = await res.json();
+  let body;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // A 200 whose body broke mid-read was served and billed.
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    throw transportError("anthropic", "network", `Anthropic ${model}: unreadable response body: ${e.message}`);
+  }
   const text = (body.content ?? [])
     .filter((b) => b.type === "text")
     .map((b) => b.text)
