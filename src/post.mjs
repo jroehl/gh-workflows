@@ -69,7 +69,8 @@ function summaryBody({ findings, orphans, meta }) {
     `${meta.raised} raised, ${meta.survived} survived refutation.`,
     "",
   ];
-  if (findings.length === 0) {
+  // The 422 fallback passes every finding as an orphan and none as findings.
+  if (findings.length === 0 && orphans.length === 0) {
     lines.push("No finding survived refutation.");
   }
   if (orphans.length) {
@@ -80,6 +81,12 @@ function summaryBody({ findings, orphans, meta }) {
     }
     lines.push("");
   }
+  if (meta.cost && typeof meta.cost.total === "number") {
+    lines.push(`Cost: $${meta.cost.total.toFixed(4)}${meta.cost.estimated ? " (estimated)" : ""}`, "");
+  }
+  // A rejected credit key is said here, on the next pull request, rather than after a
+  // month of OpenRouter bills.
+  for (const w of meta.warnings ?? []) lines.push(`⚠️ ${w}`, "");
   lines.push("_Advisory. Nothing here blocks a merge._");
   return lines.join("\n");
 }
@@ -103,12 +110,23 @@ export async function postNoReviewNotice({ repo, pr, token, stage, models, reaso
     NOTICE_MARKER,
     "**Cross-model review did not run.**",
     "",
-    `The ${stage} step failed after calling ${models.map((m) => `\`${m}\``).join(", then ")}.`,
+    models.length
+      ? `The ${stage} step failed after calling ${models.map((m) => `\`${m}\``).join(", then ")}.`
+      : stage === "post"
+        ? "The post step failed."
+        : `The ${stage} step failed before calling a model.`,
     "",
     `Last error: ${reason}`,
     "",
-    "No finding was produced, so nothing here says the change is clean. Re-run the job, or",
-    "review locally with `npx github:jroehl/gh-workflows --base <base>`.",
+    ...(stage === "post"
+      ? [
+          "The review ran, but posting it failed. Its findings are in this run's artifact",
+          `(\`pr-critic-${pr}\`, file \`pr-critic.json\`); re-run the job to post them.`,
+        ]
+      : [
+          "No finding was produced, so nothing here says the change is clean. Re-run the job, or",
+          "review locally with `npx github:jroehl/gh-workflows --base <base>`.",
+        ]),
     "",
     "_Advisory. This does not block a merge._",
   ].join("\n");

@@ -35,4 +35,12 @@ jobs:
         with:
           pr: ${{ github.event.pull_request.number }}
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Credit first: an unset secret arrives empty and the CLI drops that link,
+          # so the run falls through to OpenRouter rather than failing.
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Someone who typed /critic wants a review, docs-only or not. This workflow
+          # has no comment trigger today, so it is false here; callers that have one
+          # copy the line.
+          no-skip: ${{ github.event_name == 'issue_comment' }}

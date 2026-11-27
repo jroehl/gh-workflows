@@ -1,6 +1,6 @@
 {
   "name": "@jroehl/gh-workflows",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Cross-model adversarial PR review that runs identically in CI and on a laptop",
   "type": "module",
   "bin": {

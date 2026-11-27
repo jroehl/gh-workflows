@@ -42,7 +42,76 @@ export function collectContext({ base, cwd = process.cwd(), excludes = [], budge
   const commits = git(["log", "--format=%s%n%b", `${base}..HEAD`], cwd).trim();
   const { diff, truncated } = truncate(raw, budget);
 
-  return { stat, diff, commits, truncated, empty: raw.trim() === "" };
+  // --no-renames lists a rename as the old path deleted and the new one added, so a
+  // code file moved into docs/ still counts as a code change.
+  const paths = git(["diff", "--name-only", "--no-renames", "-z", range, "--", ".", ...pathspec], cwd)
+    .split("\0")
+    .filter(Boolean);
+  const mergeBase = git(["merge-base", base, "HEAD"], cwd).trim();
+  const attrs = readGenerated({ paths, source: mergeBase, cwd });
+  const files = paths.map((path) => ({ path, generated: attrs.generated.has(path) }));
+
+  return { stat, diff, commits, truncated, empty: raw.trim() === "", files, attrError: attrs.error };
+}
+
+// The linguist-generated attribute of each path as the tree `source` defines it, never
+// the checkout: a PR must not be able to mark its own changes generated. A failure
+// (git older than 2.40 has no --source, or a bad tree) marks nothing generated, so
+// the file is reviewed: the safe direction to be wrong in.
+export function readGenerated({ paths, source, cwd }) {
+  const generated = new Set();
+  if (paths.length === 0) return { generated, error: null };
+  let out;
+  try {
+    out = execFileSync("git", ["check-attr", "--source", source, "-z", "--stdin", "linguist-generated"], {
+      cwd,
+      input: paths.map((p) => `${p}\0`).join(""),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (err) {
+    const detail = String(err.stderr ?? err.message).trim().split("\n")[0];
+    return { generated, error: `git check-attr --source ${source} failed: ${detail}` };
+  }
+  // -z output is path NUL attribute NUL value NUL, repeated.
+  const parts = out.split("\0");
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    if (parts[i + 2] === "set" || parts[i + 2] === "true") generated.add(parts[i]);
+  }
+  return { generated, error: null };
+}
+
+// Markdown that carries instructions for an agent or for GitHub is reviewed like code. Tool
+// config lives in dot-directories (.claude, .github, .cursor, .codex, ...) and new agents keep
+// adding names, so every dot-directory counts, not a list that falls behind.
+const INSTRUCTION_DIRS = new Set(["prompts", "prompt", "skills", "agents", "instructions"]);
+const INSTRUCTION_FILES = new Set(["agents.md", "claude.md", "gemini.md", "skill.md", "copilot-instructions.md"]);
+
+function isPlainDoc(path) {
+  const parts = path.toLowerCase().split("/");
+  const name = parts.at(-1);
+  // Not .mdx: it compiles to JS components and can import and run code.
+  if (!/\.md$/.test(name)) return false;
+  if (INSTRUCTION_FILES.has(name) || name.includes("prompt")) return false;
+  return !parts.slice(0, -1).some((d) => d.startsWith(".") || INSTRUCTION_DIRS.has(d));
+}
+
+// A diff is not worth a model call when every file is plain documentation or marked
+// generated. A .gitattributes change is never skippable: it changes what counts as
+// generated for every later PR.
+export function shouldSkip(files) {
+  if (files.length === 0) return null;
+  let docs = 0;
+  let generated = 0;
+  for (const f of files) {
+    if (f.path.split("/").at(-1) === ".gitattributes") return null;
+    if (f.generated) generated++;
+    else if (isPlainDoc(f.path)) docs++;
+    else return null;
+  }
+  const kinds = [docs && `${docs} doc`, generated && `${generated} generated`].filter(Boolean).join(", ");
+  return { reason: `only documentation or generated files changed (${kinds})`, files: files.length };
 }
 
 export async function fetchPrIntent({ repo, pr, token }) {
