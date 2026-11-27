@@ -2,6 +2,8 @@ import { MAX_TOKENS, costOf, estimateInputTokens } from "./cost.mjs";
 import { emptyAnswer, redact, transportError } from "./errors.mjs";
 
 const ENDPOINT = "https://api.openai.com/v1/chat/completions";
+// Node's fetch (undici) has its own 300 s headersTimeout, which fires before this when
+// no response headers arrive; changing it would need undici as a dependency, so it stays.
 const TIMEOUT_MS = 15 * 60_000;
 
 // The error.code values developers.openai.com/api/docs/guides/error-codes lists for a
@@ -54,6 +56,7 @@ export async function completeOpenAI({ model, entry, system, user, maxTokens = M
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
     throw transportError("openai", e.name === "TimeoutError" ? "timeout" : "network", `OpenAI ${model}: ${e.message}`);
   }
 

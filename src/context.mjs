@@ -91,7 +91,8 @@ const INSTRUCTION_FILES = new Set(["agents.md", "claude.md", "gemini.md", "skill
 function isPlainDoc(path) {
   const parts = path.toLowerCase().split("/");
   const name = parts.at(-1);
-  if (!/\.mdx?$/.test(name)) return false;
+  // Not .mdx: it compiles to JS components and can import and run code.
+  if (!/\.md$/.test(name)) return false;
   if (INSTRUCTION_FILES.has(name) || name.includes("prompt")) return false;
   return !parts.slice(0, -1).some((d) => d.startsWith(".") || INSTRUCTION_DIRS.has(d));
 }

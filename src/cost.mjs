@@ -51,6 +51,16 @@ export class Budget {
     this.lastStage = stage;
   }
 
+  // A request that was sent and then failed without a usage report (network error,
+  // timeout, abort) may still have been billed in full, so it is charged at the worst
+  // case it was sized for: the prompt at the input rate plus every planned output token.
+  debitReserved({ entry, system, user, maxTokens, stage }) {
+    if (entry?.in_usd_per_m == null || entry?.out_usd_per_m == null) return 0;
+    const cost = (estimateInputTokens(system, user) * entry.in_usd_per_m + maxTokens * entry.out_usd_per_m) / 1e6;
+    this.debit(stage, cost, true);
+    return cost;
+  }
+
   trip(stage) {
     const where = this.lastStage ? `after ${this.lastStage}` : `before ${stage}`;
     return new CostCapError(`cost cap ${usd(this.max)} reached ${where}`);

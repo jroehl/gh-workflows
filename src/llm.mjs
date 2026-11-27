@@ -2,7 +2,7 @@ import { MAX_TOKENS, costOf, estimateInputTokens } from "./cost.mjs";
 import { completeOpenAI } from "./openai.mjs";
 import { completeAnthropic } from "./anthropic.mjs";
 import { completeCodex } from "./codex.mjs";
-import { emptyAnswer } from "./errors.mjs";
+import { emptyAnswer, redact, transportError } from "./errors.mjs";
 
 export { parseJson } from "./errors.mjs";
 
@@ -49,38 +49,48 @@ export async function completeOpenRouter({ model, system, user, maxTokens = MAX_
     maxPrice = { prompt: entry.in_usd_per_m, completion: entry.out_usd_per_m };
   }
 
-  const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      "X-Title": "pr-critic",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      response_format: { type: "json_object" },
-      // Documented as deprecated and always on; sent anyway because it is harmless and
-      // an older gateway would otherwise leave usage.cost out.
-      usage: { include: true },
-      // USD per million tokens, OpenRouter's unit for max_price. No provider charging
-      // more than the rate the budget was sized with may serve the call.
-      ...(maxPrice ? { provider: { max_price: maxPrice } } : {}),
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
+  let res;
+  try {
+    res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "X-Title": "pr-critic",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        response_format: { type: "json_object" },
+        // Documented as deprecated and always on; sent anyway because it is harmless and
+        // an older gateway would otherwise leave usage.cost out.
+        usage: { include: true },
+        // USD per million tokens, OpenRouter's unit for max_price. No provider charging
+        // more than the rate the budget was sized with may serve the call.
+        ...(maxPrice ? { provider: { max_price: maxPrice } } : {}),
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+  } catch (e) {
+    // Sent, maybe served and billed, but no usage came back: charge the reservation.
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
+    throw transportError("openrouter", e.name === "TimeoutError" ? "timeout" : "network", `OpenRouter ${model}: ${e.message}`);
+  }
 
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 400);
+    const body = redact((await res.text()).slice(0, 400));
     const err = new Error(`OpenRouter ${res.status}: ${body}`);
+    err.transport = "openrouter";
     // Out of credit or a dead key is not a transient hiccup: it means no review
     // will ever run again until someone acts. Tagged so the caller can be loud
     // about it instead of passing green with a warning nobody reads.
-    if (res.status === 401 || res.status === 402 || res.status === 403) err.fatal = true;
-    err.transport = "openrouter";
+    if (res.status === 401 || res.status === 402) err.fatal = true;
+    // A 403 is usually about this model (moderation, a provider's region), so the
+    // chain moves on; runChain makes it fatal on the last link, where a dead key ends.
+    else if (res.status === 403) err.code = "forbidden";
     throw err;
   }
   const body = await res.json();

@@ -47,8 +47,10 @@ test("skip: markdown for other agents, in any dot-directory or prompt/skill dire
   }
 });
 
-test("skip: docs in any directory, .mdx included, are skipped", () => {
-  assert.ok(skipOf({}, { "docs/guide.mdx": "x\n", "docs/notes/CHANGES.MD": "y\n" }));
+test("skip: docs in any directory are skipped; .mdx compiles to JS and is reviewed", () => {
+  assert.ok(skipOf({}, { "docs/notes/CHANGES.MD": "y\n" }));
+  assert.equal(skipOf({}, { "docs/guide.mdx": "x\n" }), null);
+  assert.equal(skipOf({}, { "docs/guide.mdx": "x\n", "docs/notes/CHANGES.MD": "y\n" }), null);
 });
 
 test("skip: a file the base tree marks linguist-generated is skipped", () => {

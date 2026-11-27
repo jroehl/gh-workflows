@@ -14,6 +14,35 @@ test("--allow-any-model lets an unlisted OpenRouter model through", () => {
   assert.equal(m.in_usd_per_m, null);
 });
 
+test("IDs that let OpenRouter pick the vendor are refused as a critic, even with --allow-any-model", async () => {
+  const { main } = await import("../bin/pr-critic.mjs");
+  const { tempRepo, fakeFetch, withEnv } = await import("./helpers.mjs");
+  const realFetch = globalThis.fetch;
+  try {
+    for (const id of ["openrouter/auto", "~anthropic/claude-x", "Anthropic/claude-sonnet-5.5"]) {
+      const calls = fakeFetch();
+      const { result } = await withEnv(OR_ONLY, () =>
+        main({ argv: ["--base", "HEAD~1", "--critic-model", id, "--allow-any-model"], cwd: tempRepo() }),
+      );
+      assert.equal(result.code, 3, id);
+      assert.deepEqual(calls, [], `${id}: no call was made`);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  for (const id of ["openrouter/auto", "~anthropic/claude-x", "x-ai/grok-4.3:nitro", "openai/gpt-6.1-sol:floor"]) {
+    assert.throws(() => resolveModel(id, "critic", { allowAny: true }), /OpenRouter/, id);
+    assert.throws(() => resolveModel(id, "critic"), /OpenRouter/, id);
+  }
+  assert.equal(familyOf("Anthropic/claude-sonnet-5.5"), "anthropic");
+});
+
+test("an unlisted openai:, anthropic: or codex: ID is refused even with --allow-any-model: it has no price to debit", () => {
+  for (const id of ["openai:gpt-9", "anthropic:claude-opus-9", "codex:gpt-9"]) {
+    assert.throws(() => resolveModel(id, "critic", { allowAny: true }), /no price/, id);
+  }
+});
+
 test("a listed model in a role it is not listed for is refused", () => {
   assert.throws(() => resolveModel("x-ai/grok-4.3", "refuter"), /not allowed as refuter/);
 });

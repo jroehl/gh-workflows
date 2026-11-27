@@ -112,6 +112,25 @@ test("the review footer shows the run's total cost, marked when estimated", asyn
   assert.match(posted.body, /Cost: \$0\.0334 \(estimated\)/);
 });
 
+test("a review degraded by a 422 carries every finding and does not say none survived", async () => {
+  const bodies = [];
+  fakeGitHub({
+    [`POST /repos/${repo}/pulls/${pr}/reviews`]: (url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      if (body.comments.length) return new Response("Unprocessable: line not in diff", { status: 422 });
+      return new Response(JSON.stringify({ id: 2 }), { status: 200 });
+    },
+  });
+  const diff = "diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1,2 @@\n-x\n+y\n+z\n";
+  const f = { file: "a.js", line: 2, severity: "high", claim: "division by zero", failure_scenario: "boom" };
+  const posted = await postReview({ repo, pr, token: "t", diff, findings: [f], meta: { ...meta, raised: 1, survived: 1 } });
+  assert.equal(posted.degraded, true);
+  const summary = bodies.at(-1).body;
+  assert.match(summary, /division by zero/);
+  assert.doesNotMatch(summary, /No finding survived refutation/);
+});
+
 test("an unknown model with --post posts the config notice and exits 3 before any model call", async () => {
   const { main } = await import("../bin/pr-critic.mjs");
   const { tempRepo, withEnv } = await import("./helpers.mjs");

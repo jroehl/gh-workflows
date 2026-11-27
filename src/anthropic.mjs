@@ -5,6 +5,8 @@ const ENDPOINT = "https://api.anthropic.com/v1/messages";
 // platform.claude.com/docs/en/api/versioning, checked 2026-11-27. This version removed
 // temperature/top_p/top_k, which are never sent anyway.
 const VERSION = "2026-10-21";
+// Node's fetch (undici) has its own 300 s headersTimeout, which fires before this when
+// no response headers arrive; changing it would need undici as a dependency, so it stays.
 const TIMEOUT_MS = 15 * 60_000;
 
 // platform.claude.com/docs/en/api/errors: a spent credit or a spend limit shows as a
@@ -47,6 +49,7 @@ export async function completeAnthropic({ model, entry, system, user, schema, ma
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
+    if (budget && entry) budget.debitReserved({ entry, system, user, maxTokens, stage });
     throw transportError("anthropic", e.name === "TimeoutError" ? "timeout" : "network", `Anthropic ${model}: ${e.message}`);
   }
 

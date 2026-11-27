@@ -115,7 +115,7 @@ A diff where every changed file is plain documentation or generated is not sent 
 model. It posts nothing, removes a stale "no review ran" notice, writes
 `meta.skipped` with the reason, and exits 0. A file counts as:
 
-- documentation when it is `*.md` or `*.mdx`, outside any dot-directory (`.claude/`,
+- documentation when it is `*.md` (not `*.mdx`, which compiles to JS), outside any dot-directory (`.claude/`,
   `.github/`, `.cursor/`, ...) or `prompts/`, `skills/`, `agents/` or `instructions/`
   directory, and not an agent file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md`,
   anything with "prompt" in its name). Those carry instructions for agents or for GitHub,

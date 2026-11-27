@@ -159,10 +159,12 @@ function warnRejected(transport) {
   else console.error(line);
 }
 
-// Tries each link in order until one answers. A dead OpenRouter key fails the same way
-// on every OpenRouter link, and a cost-cap trip would trip again, so both end the
-// chain. A rejected credit key moves on, unless no link is left: then it is as final
-// as a dead OpenRouter key.
+// Tries each link in order until one answers. A dead OpenRouter key (401, 402) fails the
+// same way on every OpenRouter link, so it ends the chain. A cost-cap trip happens
+// before any request, and the next link may be cheaper, so it moves on; the chain stops
+// on it only when no link is left. An OpenRouter 403 is usually model-specific
+// (moderation) and moves on too. A rejected credit key or a 403 on the last link is as
+// final as a dead OpenRouter key.
 export async function runChain({ links, role, attempts, warnings = [], call }) {
   let last;
   const rejected = [];
@@ -183,7 +185,8 @@ export async function runChain({ links, role, attempts, warnings = [], call }) {
         if (!rejected.includes(link.transport)) rejected.push(link.transport);
         if (i === links.length - 1) err.fatal = true;
       }
-      if (err.fatal || err.code === "cost_cap" || i === links.length - 1) throw err;
+      if (err.code === "forbidden" && i === links.length - 1) err.fatal = true;
+      if (err.fatal || i === links.length - 1) throw err;
       console.error(`${role} ${link.id} failed: ${err.message}`);
       console.error(`retrying with ${links[i + 1].id}`);
       last = err;
@@ -338,14 +341,25 @@ async function run({ argv, cwd = process.cwd(), env = process.env }) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("--post needs GITHUB_TOKEN");
     if (!repo || !args.pr) throw new Error("--post needs --pr and a resolvable repo");
-    const posted = await postReview({
-      repo,
-      pr: args.pr,
-      token,
-      diff: context.diff,
-      findings: survivors,
-      meta: result.meta,
-    });
+    // Written first, so the uploaded artifact holds the findings that were paid for
+    // even when GitHub refuses the review.
+    if (args.json) writeFileSync(args.json, JSON.stringify(result, null, 2));
+    let posted;
+    try {
+      posted = await postReview({
+        repo,
+        pr: args.pr,
+        token,
+        diff: context.diff,
+        findings: survivors,
+        meta: result.meta,
+      });
+    } catch (err) {
+      await announceNoReview({ repo, pr: args.pr, post: args.post, stage: "post", models: [], reason: err.message });
+      console.error(`pr-critic: posting the review failed: ${err.message}`);
+      console.log(JSON.stringify(result, null, 2));
+      return { code: 1, result };
+    }
     result.posted = posted;
     console.error(
       `posted review ${posted.id}: ${posted.inline} inline, ${posted.orphans} in summary` +

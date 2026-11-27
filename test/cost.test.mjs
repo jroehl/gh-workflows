@@ -93,12 +93,14 @@ test("an empty answer that was billed still counts toward the cap", async () => 
   assert.equal(budget.by.critic, 0.2);
 });
 
-test("cli: a $0.49 critic stops before the refuter, posts the cost-cap notice, exits 1", async () => {
+// $0.49 left $0.01, room for 20,000 haiku tokens at $0.50/M, so haiku really ran. $0.499
+// leaves $0.001: 2,000 haiku tokens, under the 4,000 floor, and no link fits.
+test("cli: a $0.499 critic stops before the refuter, posts the cost-cap notice, exits 1", async () => {
   const cwd = tempRepo();
   const calls = fakeFetch({
     answers: {
       "x-ai/grok-4.3": [
-        orReply(JSON.stringify({ findings: [finding()] }), { prompt_tokens: 1, completion_tokens: 1, cost: 0.49 }),
+        orReply(JSON.stringify({ findings: [finding()] }), { prompt_tokens: 1, completion_tokens: 1, cost: 0.499 }),
       ],
     },
     github: {
@@ -109,7 +111,8 @@ test("cli: a $0.49 critic stops before the refuter, posts the cost-cap notice, e
     main({ argv: ["--base", "HEAD~1", "--post", "--pr", "7", "--repo", "o/r"], cwd }),
   );
   assert.equal(result.code, 1);
-  assert.ok(!calls.some((c) => c.model === "google/gemini-3.1-pro-preview"), "the refuter was never called");
+  const refuterModels = ["anthropic/claude-haiku-5.5", "google/gemini-3.1-pro-preview"];
+  assert.ok(!calls.some((c) => refuterModels.includes(c.model)), "no refuter link was called");
   const notice = calls.find((c) => c.kind === "github" && c.method === "POST");
   assert.match(notice.body.body, /cost cap \$0\.50 reached after critic/);
 });

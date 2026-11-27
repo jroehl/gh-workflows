@@ -1,5 +1,8 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { completeOpenAI } from "../src/openai.mjs";
 import { completeAnthropic } from "../src/anthropic.mjs";
 import { complete } from "../src/llm.mjs";
@@ -7,7 +10,7 @@ import { resolveModel } from "../src/models.mjs";
 import { Budget } from "../src/cost.mjs";
 import { REFUTE_SCHEMA } from "../src/refute.mjs";
 import { main, runChain } from "../bin/pr-critic.mjs";
-import { tempRepo, fakeFetch, orReply, oaReply, anReply, apiError, finding, withEnv } from "./helpers.mjs";
+import { tempRepo, repoWith, fakeFetch, orReply, oaReply, anReply, apiError, finding, withEnv } from "./helpers.mjs";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -313,5 +316,112 @@ test("a rejected credit key on the last link of a chain is fatal", async () => {
       runChain({ links: [link], role: "critic", attempts, warnings: [], call: async () => { throw auth; } }),
       (e) => e.fatal === true,
     ),
+  );
+});
+
+// ---------- review fixes, round 1 ----------
+
+test("cli: a GitHub 500 on the review POST keeps the survivors in --json, posts the notice naming the artifact, exits 1", async () => {
+  const cwd = tempRepo();
+  const json = join(mkdtempSync(join(tmpdir(), "pr-critic-json-")), "out.json");
+  const calls = fakeFetch({
+    answers: { "x-ai/grok-4.3": [orReply(CRITIC_JSON)], "anthropic/claude-haiku-5.5": [orReply(VERDICT_JSON)] },
+    github: {
+      "POST /repos/o/r/pulls/7/reviews": () => new Response("server error", { status: 500 }),
+      "POST /repos/o/r/issues/7/comments": () => new Response(JSON.stringify({ id: 55 }), { status: 201 }),
+    },
+  });
+  const { result } = await withEnv({ OPENROUTER_API_KEY: "k", GITHUB_TOKEN: "t" }, () =>
+    main({ argv: ["--base", "HEAD~1", "--post", "--pr", "7", "--repo", "o/r", "--json", json], cwd }),
+  );
+  assert.equal(result.code, 1);
+  const out = JSON.parse(readFileSync(json, "utf8"));
+  assert.equal(out.findings.length, 1);
+  assert.equal(out.findings[0].claim, "division by zero");
+  const notice = calls.find((c) => c.kind === "github" && c.method === "POST" && c.path === "/repos/o/r/issues/7/comments");
+  assert.ok(notice, "the no-review notice was posted");
+  assert.match(notice.body.body, /post step failed/);
+  assert.match(notice.body.body, /500/);
+  assert.match(notice.body.body, /artifact/);
+});
+
+test("cli: --max-cost 0.1 with a big prompt: openai: trips the cap and x-ai/grok-4.3 runs", async () => {
+  // About 40k tokens: past what openai: can fit under $0.10 at $2/M in and $10/M out
+  // with the 4000-token floor, inside what grok can at $1.25/M and $2.50/M.
+  const big = Array.from({ length: 4000 }, (_, i) => `export const v${i} = "${"y".repeat(28)}";`).join("\n") + "\n";
+  const cwd = repoWith({}, { "big.js": big });
+  const calls = fakeFetch({
+    answers: {
+      "gpt-6.1-sol": [oaReply(CRITIC_JSON)],
+      "x-ai/grok-4.3": [orReply(JSON.stringify({ findings: [finding({ file: "big.js", line: 2 })] }), { prompt_tokens: 1, completion_tokens: 1, cost: 0.01 })],
+      ...refuterOk(),
+    },
+  });
+  const { result } = await withEnv({ OPENROUTER_API_KEY: "k", ...OA }, () =>
+    main({ argv: ["--base", "HEAD~1", "--max-cost", "0.1"], cwd }),
+  );
+  assert.equal(result.code, 0);
+  const attempts = result.result.meta.chain.attempts;
+  assert.equal(attempts[0].model, "openai:gpt-6.1-sol");
+  assert.equal(attempts[0].error, "cost_cap");
+  assert.equal(result.result.meta.critic, "x-ai/grok-4.3");
+  assert.ok(!calls.some((c) => c.kind === "openai"), "openai: was skipped before any request");
+});
+
+for (const [name, key] of [
+  ["openai:", OA],
+  ["anthropic:", AN],
+  ["OpenRouter", { OPENROUTER_API_KEY: "k" }],
+]) {
+  test(`${name} a fetch that rejects after the request is sent debits the reserved worst case`, async () => {
+    globalThis.fetch = async () => {
+      throw new TypeError("fetch failed");
+    };
+    const budget = new Budget(0.5);
+    const entry = name === "anthropic:" ? haiku : name === "openai:" ? sol : resolveModel("openai/gpt-6.1-sol", "critic");
+    const run = name === "openai:" ? oa : name === "anthropic:" ? an : (x) => complete({ model: entry.id, entry, system: "S", user: "U", ...x });
+    // One input token for "S"+"U"; max_tokens is the 32k ceiling at this budget.
+    const reserved = (1 * entry.in_usd_per_m + 32_000 * entry.out_usd_per_m) / 1e6;
+    await withEnv(key, () => assert.rejects(run({ budget, stage: "critic" })));
+    assert.ok(Math.abs(budget.spent - reserved) < 1e-12, `spent ${budget.spent}, reserved ${reserved}`);
+    assert.equal(budget.estimated, true);
+  });
+}
+
+test("OpenRouter 403 on grok fails over to openai/gpt-6.1-sol", async () => {
+  const cwd = tempRepo();
+  fakeFetch({
+    answers: {
+      "x-ai/grok-4.3": [apiError(403, { error: { message: "flagged by moderation" } })],
+      "openai/gpt-6.1-sol": [orReply(CRITIC_JSON)],
+      ...refuterOk(),
+    },
+  });
+  const { result } = await withEnv({ OPENROUTER_API_KEY: "k" }, () => main({ argv: ["--base", "HEAD~1"], cwd }));
+  assert.equal(result.code, 0);
+  assert.equal(result.result.meta.critic, "openai/gpt-6.1-sol");
+  assert.equal(result.result.meta.chain.attempts[0].model, "x-ai/grok-4.3");
+});
+
+test("OpenRouter 403 on the last link of a chain is still fatal", async () => {
+  const link = { id: "x-ai/grok-4.3", family: "x-ai", transport: "openrouter" };
+  fakeFetch({ answers: { "x-ai/grok-4.3": [apiError(403, { error: { message: "Forbidden" } })] } });
+  await withEnv({ OPENROUTER_API_KEY: "k" }, () =>
+    assert.rejects(
+      runChain({ links: [link], role: "critic", attempts: [], call: () => complete({ model: link.id, system: "s", user: "u" }) }),
+      (e) => e.fatal === true,
+    ),
+  );
+});
+
+test("an OpenRouter error body is redacted before it reaches the error message", async () => {
+  const secret = "sk-or-v1-" + "a1".repeat(32);
+  fakeFetch({ answers: { "x-ai/grok-4.3": [new Response(`upstream echoed Bearer ${secret}`, { status: 500 })] } });
+  await withEnv({ OPENROUTER_API_KEY: "k" }, () =>
+    assert.rejects(complete({ model: "x-ai/grok-4.3", system: "s", user: "u" }), (e) => {
+      assert.doesNotMatch(e.message, /a1a1a1a1/);
+      assert.match(e.message, /\[redacted\]/);
+      return true;
+    }),
   );
 });

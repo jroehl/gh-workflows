@@ -36,9 +36,23 @@ export function familyOf(id) {
   if (listed) return listed.family;
   const t = transportOf(id);
   if (t !== "openrouter") return PREFIXES[t];
+  assertFixedVendor(id);
   const slash = id.indexOf("/");
   if (slash <= 0) throw new ConfigError(`${id}: not a vendor/model ID`);
-  return id.slice(0, slash);
+  return id.slice(0, slash).toLowerCase();
+}
+
+// The family rule holds only if the vendor in the ID is the vendor that answers.
+// openrouter/ (auto, a router) and ~ aliases let OpenRouter pick the model. The :
+// variants keep the model (openrouter.ai/docs/guides/routing/model-variants, checked
+// 2026-11-27), but :nitro and :floor admit other service tiers and so other prices
+// than the registry's, and the rest add little worth an exception: every : is refused.
+function assertFixedVendor(id) {
+  const slash = id.indexOf("/");
+  const vendor = slash > 0 ? id.slice(0, slash).toLowerCase() : "";
+  if (id.startsWith("~") || vendor === "openrouter" || (slash > 0 && id.slice(slash).includes(":"))) {
+    throw new ConfigError(`${id}: lets OpenRouter choose the model or its price; name a fixed vendor/model ID`);
+  }
 }
 
 export function resolveModel(id, role, { allowAny = false } = {}) {
@@ -46,6 +60,16 @@ export function resolveModel(id, role, { allowAny = false } = {}) {
   const transport = transportOf(id);
   const listed = byId.get(id);
   if (!listed) {
+    // Before the allowlist, so the reason given is the real one with or without the flag.
+    if (transport === "openrouter") assertFixedVendor(id);
+    // A direct link is costed from the registry alone (OpenAI and Anthropic report
+    // tokens, not money), so an unlisted one would never be debited against the cap.
+    if (transport !== "openrouter") {
+      throw new ConfigError(
+        `${id} is not in src/models.json, so it has no price to debit against the cost cap; ` +
+          "--allow-any-model covers OpenRouter IDs only",
+      );
+    }
     // The flag skips the allowlist only. Prices are unknown, so the cost of such a
     // model is whatever OpenRouter reports, and nothing bounds its output in advance.
     if (!allowAny) {
@@ -53,10 +77,7 @@ export function resolveModel(id, role, { allowAny = false } = {}) {
         `${id} is not on the allowlist in src/models.json (pass --allow-any-model to use it locally)`,
       );
     }
-    // An unlisted direct ID has no api_model entry; what follows the prefix is taken
-    // as the vendor's own name, exactly as typed.
-    const api_model = transport === "openrouter" ? undefined : id.slice(id.indexOf(":") + 1);
-    return { id, api_model, family: familyOf(id), transport, role, in_usd_per_m: null, out_usd_per_m: null, listed: false };
+    return { id, family: familyOf(id), transport, role, in_usd_per_m: null, out_usd_per_m: null, listed: false };
   }
   if (!allowAny && !listed.roles.includes(role)) {
     throw new ConfigError(`${id} is not allowed as ${role} (src/models.json lists it for ${listed.roles.join(", ")})`);
